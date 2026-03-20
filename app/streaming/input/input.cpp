@@ -73,8 +73,8 @@ SdlInputHandler::SdlInputHandler(StreamingPreferences& prefs, int streamWidth, i
     m_SpecialKeyCombos[KeyComboQuit].enabled = true;
 
     m_SpecialKeyCombos[KeyComboUngrabInput].keyCombo = KeyComboUngrabInput;
-    m_SpecialKeyCombos[KeyComboUngrabInput].keyCode = SDLK_z;
-    m_SpecialKeyCombos[KeyComboUngrabInput].scanCode = SDL_SCANCODE_Z;
+    m_SpecialKeyCombos[KeyComboUngrabInput].keyCode = SDLK_RALT;
+    m_SpecialKeyCombos[KeyComboUngrabInput].scanCode = SDL_SCANCODE_RALT;
     m_SpecialKeyCombos[KeyComboUngrabInput].enabled = WMUtils::isRunningDesktopEnvironment();
 
     m_SpecialKeyCombos[KeyComboToggleFullScreen].keyCombo = KeyComboToggleFullScreen;
