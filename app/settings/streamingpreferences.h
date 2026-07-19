@@ -201,6 +201,11 @@ public:
     CaptureSysKeysMode captureSysKeysMode;
     RendererSelection rendererSelection;
 
+    // Advanced (config-file / environment only): external commands run when the
+    // mouse capture state changes. Empty string disables the respective command.
+    QString captureCommand;
+    QString releaseCommand;
+
 signals:
     void displayModeChanged();
     void bitrateChanged();

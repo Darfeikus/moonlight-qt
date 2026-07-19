@@ -8,6 +8,7 @@
 #include <QtGlobal>
 #include <QDir>
 #include <QGuiApplication>
+#include <QProcess>
 
 SdlInputHandler::SdlInputHandler(StreamingPreferences& prefs, int streamWidth, int streamHeight)
     : m_MultiController(prefs.multiController),
@@ -23,6 +24,9 @@ SdlInputHandler::SdlInputHandler(StreamingPreferences& prefs, int streamWidth, i
       m_KeyboardCaptureActive(false),
       m_CaptureSystemKeysMode(prefs.captureSysKeysMode),
       m_MouseCursorCapturedVisibilityState(SDL_DISABLE),
+      m_CaptureCommand(prefs.captureCommand),
+      m_ReleaseCommand(prefs.releaseCommand),
+      m_HardwareCaptureForwarded(false),
       m_LongPressTimer(0),
       m_StreamWidth(streamWidth),
       m_StreamHeight(streamHeight),
@@ -426,6 +430,45 @@ void SdlInputHandler::setCaptureActive(bool active)
 
     // Now update the keyboard grab
     updateKeyboardGrabState();
+
+    // Run the configured external command on capture state transitions
+    dispatchCaptureCommand(active);
+}
+
+void SdlInputHandler::dispatchCaptureCommand(bool active)
+{
+    // Only act on genuine transitions to avoid duplicate invocations from
+    // repeated same-state calls to setCaptureActive().
+    if (active == m_HardwareCaptureForwarded) {
+        return;
+    }
+
+    m_HardwareCaptureForwarded = active;
+
+    const QString& command = active ? m_CaptureCommand : m_ReleaseCommand;
+    if (command.isEmpty()) {
+        // Feature disabled for this transition
+        return;
+    }
+
+    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                "Running mouse %s command: %s",
+                active ? "capture" : "release",
+                command.toUtf8().constData());
+
+    // Run detached and asynchronously so we never stall the event/render thread
+    // and so the release command's process (e.g. ssh) can complete even while
+    // Moonlight itself is exiting.
+#ifdef Q_OS_WIN
+    bool started = QProcess::startDetached("cmd", { "/c", command });
+#else
+    bool started = QProcess::startDetached("/bin/sh", { "-c", command });
+#endif
+    if (!started) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "Failed to launch mouse %s command",
+                     active ? "capture" : "release");
+    }
 }
 
 void SdlInputHandler::handleTouchFingerEvent(SDL_TouchFingerEvent* event)

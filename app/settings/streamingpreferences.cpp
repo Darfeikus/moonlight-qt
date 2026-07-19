@@ -52,6 +52,8 @@
 #define SER_KEEPAWAKE "keepawake"
 #define SER_LANGUAGE "language"
 #define SER_RENDERER "renderer"
+#define SER_CAPTURECMD "capturecommand"
+#define SER_RELEASECMD "releasecommand"
 
 #define CURRENT_DEFAULT_VER 2
 
@@ -172,6 +174,14 @@ void StreamingPreferences::reload()
     language = static_cast<Language>(settings.value(SER_LANGUAGE,
                                                     static_cast<int>(Language::LANG_AUTO)).toInt());
 
+    // Commands run on mouse capture state changes. Environment variables take
+    // precedence over the config file so they can be overridden per-launch.
+    captureCommand = qEnvironmentVariableIsSet("MOONLIGHT_CAPTURE_COMMAND")
+                         ? qEnvironmentVariable("MOONLIGHT_CAPTURE_COMMAND")
+                         : settings.value(SER_CAPTURECMD, QString()).toString();
+    releaseCommand = qEnvironmentVariableIsSet("MOONLIGHT_RELEASE_COMMAND")
+                         ? qEnvironmentVariable("MOONLIGHT_RELEASE_COMMAND")
+                         : settings.value(SER_RELEASECMD, QString()).toString();
 
     // Perform default settings updates as required based on last default version
     if (defaultVer < 1) {

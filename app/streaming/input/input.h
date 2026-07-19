@@ -188,6 +188,8 @@ private:
 
     void performSpecialKeyCombo(KeyCombo combo);
 
+    void dispatchCaptureCommand(bool active);
+
     static
     Uint32 longPressTimerCallback(Uint32 interval, void* param);
 
@@ -225,6 +227,10 @@ private:
     QStringList m_IgnoreDeviceGuids;
     StreamingPreferences::CaptureSysKeysMode m_CaptureSystemKeysMode;
     int m_MouseCursorCapturedVisibilityState;
+
+    QString m_CaptureCommand;
+    QString m_ReleaseCommand;
+    bool m_HardwareCaptureForwarded;
 
     struct {
         KeyCombo keyCombo;
