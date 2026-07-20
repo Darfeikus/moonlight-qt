@@ -20,7 +20,52 @@ You can follow development on our [Discord server](https://moonlight-stream.org/
  - Gamepad support with force feedback and motion controls for up to 16 players
  - Support for both pointer capture (for games) and direct mouse control (for remote desktop)
  - Support for passing system-wide keyboard shortcuts like Alt+Tab to the host
- 
+
+## Fork customizations
+
+This fork adds a personal quality-of-life change on top of upstream Moonlight. It is optional and does not affect users who don't configure it.
+
+### Run a command on mouse capture / release (VirtualHere forwarding)
+
+Moonlight can run an arbitrary shell command whenever it grabs or releases the mouse. The original use case is forwarding a **physical USB mouse** to the streaming host with [VirtualHere](https://www.virtualhere.com/) over SSH, so the hardware mouse is captured by the remote PC while streaming and returned to the local PC when you ungrab.
+
+The commands are read from two settings (or the equivalent environment variables, which take precedence):
+
+| Setting key (config file) | Environment variable | Runs when |
+| --- | --- | --- |
+| `capturecommand` | `MOONLIGHT_CAPTURE_COMMAND` | Mouse capture is grabbed |
+| `releasecommand` | `MOONLIGHT_RELEASE_COMMAND` | Mouse capture is released |
+
+The literal token `{host}` in either command is replaced at runtime with the address of the PC currently being streamed to (the same address Moonlight connected on), so a single command works across multiple hosts. Commands are launched detached via `/bin/sh -c` (or `cmd /c` on Windows); leaving a command empty disables it for that transition.
+
+The config file lives at:
+- **Linux:** `~/.config/Moonlight Game Streaming Project/Moonlight.conf`
+- **macOS:** `~/Library/Preferences/com.moonlight-stream.Moonlight.plist`
+- **Windows:** registry under `HKCU\Software\Moonlight Game Streaming Project\Moonlight`
+
+#### Requirements
+
+- **Passwordless, non-interactive command execution.** The command is run detached with no terminal, so it must succeed without prompting. For SSH this means key-based auth (no password) and the target host already in `known_hosts`.
+- **VirtualHere client** installed on each host you stream to, reachable at a known path, with the USB server running and the device visible in its device list.
+
+#### Example configuration (VirtualHere over SSH)
+
+Add these keys under the `[General]` section of the config file. The `{host}` token is substituted automatically; `USB Receiver` here is identified by its VirtualHere device address (find it by running the client with `-t "LIST"`):
+
+```ini
+capturecommand=ssh user@{host} "%USERPROFILE%\\Downloads\\vhui64.exe -t \"USE,SERVERNAME.DEVICEID\""
+releasecommand=ssh user@{host} "%USERPROFILE%\\Downloads\\vhui64.exe -t \"STOP USING ALL\""
+```
+
+Or, without editing the config file, via environment variables:
+
+```sh
+export MOONLIGHT_CAPTURE_COMMAND='ssh user@{host} "%USERPROFILE%\Downloads\vhui64.exe -t \"USE,SERVERNAME.DEVICEID\""'
+export MOONLIGHT_RELEASE_COMMAND='ssh user@{host} "%USERPROFILE%\Downloads\vhui64.exe -t \"STOP USING ALL\""'
+```
+
+Using `%USERPROFILE%` (rather than an absolute path) keeps the command portable across hosts as long as the VirtualHere client lives in each user's `Downloads` folder. See the [VirtualHere client API](https://www.virtualhere.com/client_api) for the full list of `-t` commands.
+
 ## Downloads
 - [Windows, macOS, and Steam Link](https://github.com/moonlight-stream/moonlight-qt/releases)
 - [Snap (for Ubuntu-based Linux distros)](https://snapcraft.io/moonlight)
