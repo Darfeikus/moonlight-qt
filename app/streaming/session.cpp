@@ -1630,6 +1630,10 @@ bool Session::startConnectionAsync()
     QByteArray hostnameStr = m_Computer->activeAddress.address().toUtf8();
     QByteArray siAppVersion = m_Computer->appVersion.toUtf8();
 
+    // Provide the input handler with the address we're actually connecting to
+    // so capture/release commands can target the current host.
+    m_InputHandler->setHostAddress(m_Computer->activeAddress.address());
+
     SERVER_INFORMATION hostInfo;
     hostInfo.address = hostnameStr.data();
     hostInfo.serverInfoAppVersion = siAppVersion.data();

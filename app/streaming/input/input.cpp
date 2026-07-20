@@ -435,6 +435,11 @@ void SdlInputHandler::setCaptureActive(bool active)
     dispatchCaptureCommand(active);
 }
 
+void SdlInputHandler::setHostAddress(const QString& address)
+{
+    m_HostAddress = address;
+}
+
 void SdlInputHandler::dispatchCaptureCommand(bool active)
 {
     // Only act on genuine transitions to avoid duplicate invocations from
@@ -445,11 +450,15 @@ void SdlInputHandler::dispatchCaptureCommand(bool active)
 
     m_HardwareCaptureForwarded = active;
 
-    const QString& command = active ? m_CaptureCommand : m_ReleaseCommand;
+    QString command = active ? m_CaptureCommand : m_ReleaseCommand;
     if (command.isEmpty()) {
         // Feature disabled for this transition
         return;
     }
+
+    // Substitute the address of the host we're currently streaming to. This
+    // lets a single configured command target whichever PC we're remoting into.
+    command.replace(QLatin1String("{host}"), m_HostAddress);
 
     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                 "Running mouse %s command: %s",

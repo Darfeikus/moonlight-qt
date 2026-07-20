@@ -146,6 +146,8 @@ public:
 
     void setCaptureActive(bool active);
 
+    void setHostAddress(const QString& address);
+
     bool isMouseInVideoRegion(int mouseX, int mouseY, int windowWidth = -1, int windowHeight = -1);
 
     void updateKeyboardGrabState();
@@ -230,6 +232,7 @@ private:
 
     QString m_CaptureCommand;
     QString m_ReleaseCommand;
+    QString m_HostAddress;
     bool m_HardwareCaptureForwarded;
 
     struct {
