@@ -214,6 +214,7 @@ private:
     bool m_ReverseScrollDirection;
     bool m_SwapFaceButtons;
 
+    bool m_NeedsManualCaptureOnLeave;
     bool m_MouseWasInVideoRegion;
     bool m_PendingMouseButtonsAllUpOnVideoRegionLeave;
     bool m_PointerRegionLockActive;

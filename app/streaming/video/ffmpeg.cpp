@@ -3,9 +3,7 @@
 #include "utils.h"
 #include "streaming/session.h"
 
-#ifdef HAVE_H264BITSTREAM
 #include <h264_stream.h>
-#endif
 
 extern "C" {
 #include <libavutil/mastering_display_metadata.h>
@@ -717,13 +715,8 @@ bool FFmpegVideoDecoder::completeInitialization(const AVCodec* decoder, enum AVP
     if (testMode != TestMode::TestFrameOnly) {
         if ((params->videoFormat & VIDEO_FORMAT_MASK_H264) &&
                 !(m_BackendRenderer->getDecoderCapabilities() & CAPABILITY_REFERENCE_FRAME_INVALIDATION_AVC)) {
-#ifdef HAVE_H264BITSTREAM
             SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                         "Using H.264 SPS fixup");
-#else
-            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
-                        "H.264 SPS fixup cannot be performed without h264bitstream. H.264 may have excessive decoding latency!");
-#endif
             m_NeedsSpsFixup = true;
         }
         else {
@@ -997,6 +990,8 @@ void FFmpegVideoDecoder::logVideoStats(VIDEO_STATS& stats, const char* title)
 
 IFFmpegRenderer* FFmpegVideoDecoder::createHwAccelRenderer(const AVCodecHWConfig* hwDecodeCfg, PDECODER_PARAMETERS params, int pass)
 {
+    Q_UNUSED(params);
+
     if (!(hwDecodeCfg->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX)) {
         return nullptr;
     }
@@ -1765,10 +1760,10 @@ bool FFmpegVideoDecoder::initialize(PDECODER_PARAMETERS params)
 
 void FFmpegVideoDecoder::writeBuffer(PLENTRY entry, int& offset)
 {
-#ifdef HAVE_H264BITSTREAM
     if (m_NeedsSpsFixup && entry->bufferType == BUFFER_TYPE_SPS) {
         h264_stream_t* stream = h264_new();
         int nalStart, nalEnd;
+        bool needsFixup;
 
         // Read the old NALU
         find_nal_unit((uint8_t*)entry->data, entry->length, &nalStart, &nalEnd);
@@ -1781,39 +1776,64 @@ void FFmpegVideoDecoder::writeBuffer(PLENTRY entry, int& offset)
 
         // Fixup the SPS to what OS X needs to use hardware acceleration
         // This is also critical for decoding latency on the Pi 2.
-        stream->sps->num_ref_frames = 1;
-        stream->sps->vui.max_dec_frame_buffering = 1;
+        needsFixup = (stream->sps->num_ref_frames != 1 || stream->sps->vui.max_dec_frame_buffering != 1);
+#ifndef QT_DEBUG
+        if (needsFixup)
+#endif
+        {
+            stream->sps->num_ref_frames = 1;
+            stream->sps->vui.max_dec_frame_buffering = 1;
 
-        // NVENC doesn't seem to add bitstream restrictions anymore (591.59),
-        // so we need to add them ourselves if not present to ensure that
-        // the max_dec_frame_buffering option actually takes effect.
-        // We use the defaults for everything except max_dec_frame_buffering.
-        if (!stream->sps->vui.bitstream_restriction_flag) {
-            stream->sps->vui.bitstream_restriction_flag = 1;
-            stream->sps->vui.motion_vectors_over_pic_boundaries_flag = 1;
-            stream->sps->vui.max_bytes_per_pic_denom = 2;
-            stream->sps->vui.max_bits_per_mb_denom = 1;
-            stream->sps->vui.log2_max_mv_length_horizontal = 16;
-            stream->sps->vui.log2_max_mv_length_vertical = 16;
-            stream->sps->vui.num_reorder_frames = 0;
+            // NVENC doesn't seem to add bitstream restrictions anymore (591.59),
+            // so we need to add them ourselves if not present to ensure that
+            // the max_dec_frame_buffering option actually takes effect.
+            // We use the defaults for everything except max_dec_frame_buffering.
+            if (!stream->sps->vui.bitstream_restriction_flag) {
+                stream->sps->vui.bitstream_restriction_flag = 1;
+                stream->sps->vui.motion_vectors_over_pic_boundaries_flag = 1;
+                stream->sps->vui.max_bytes_per_pic_denom = 2;
+                stream->sps->vui.max_bits_per_mb_denom = 1;
+                stream->sps->vui.log2_max_mv_length_horizontal = 16;
+                stream->sps->vui.log2_max_mv_length_vertical = 16;
+                stream->sps->vui.num_reorder_frames = 0;
+            }
+
+            int initialOffset = offset;
+
+            // Copy the modified NALU data. This clobbers byte 0 and starts NALU data at byte 1.
+            // Since it prepended one extra byte, subtract one from the returned length.
+            offset += write_nal_unit(stream, (uint8_t*)&m_DecodeBuffer.data()[initialOffset + nalStart - 1],
+                                     MAX_SPS_EXTRA_SIZE + entry->length - nalStart) - 1;
+
+            // Copy the NALU prefix over from the original SPS
+            memcpy(&m_DecodeBuffer.data()[initialOffset], entry->data, nalStart);
+            offset += nalStart;
+
+#ifdef QT_DEBUG
+            // If we didn't need a fixup, the SPS should have stayed the exact same
+            if (!needsFixup) {
+                SDL_assert(offset - initialOffset == entry->length);
+                SDL_assert(memcmp(&m_DecodeBuffer.data()[initialOffset], entry->data, entry->length) == 0);
+            }
+            else {
+                // The SPS should never get smaller with a fixup
+                SDL_assert(offset - initialOffset >= entry->length);
+            }
+#endif
         }
-
-        int initialOffset = offset;
-
-        // Copy the modified NALU data. This clobbers byte 0 and starts NALU data at byte 1.
-        // Since it prepended one extra byte, subtract one from the returned length.
-        offset += write_nal_unit(stream, (uint8_t*)&m_DecodeBuffer.data()[initialOffset + nalStart - 1],
-                                 MAX_SPS_EXTRA_SIZE + entry->length - nalStart) - 1;
-
-        // Copy the NALU prefix over from the original SPS
-        memcpy(&m_DecodeBuffer.data()[initialOffset], entry->data, nalStart);
-        offset += nalStart;
+#ifndef QT_DEBUG
+        else {
+            // Write the SPS as-is if it required no modification
+            memcpy(&m_DecodeBuffer.data()[offset],
+                   entry->data,
+                   entry->length);
+            offset += entry->length;
+        }
+#endif
 
         h264_free(stream);
     }
-    else
-#endif
-    {
+    else {
         // Write the buffer as-is
         memcpy(&m_DecodeBuffer.data()[offset],
                entry->data,
@@ -1923,6 +1943,74 @@ void FFmpegVideoDecoder::decoderThreadProc()
                             frame->crop_right = cropWidth;
                             frame->crop_bottom = cropHeight;
                             av_frame_apply_cropping(frame, 0);
+                        }
+                    }
+
+                    // Some decoders don't propagate color metadata from the bitstream,
+                    // so we will try to guess it here if it was unset.
+                    if (frame->color_range == AVCOL_RANGE_UNSPECIFIED) {
+                        switch (getDecoderColorRange()) {
+                        case COLOR_RANGE_LIMITED:
+                            frame->color_range = AVCOL_RANGE_MPEG;
+                            break;
+                        case COLOR_RANGE_FULL:
+                            frame->color_range = AVCOL_RANGE_JPEG;
+                            break;
+                        }
+                    }
+                    if (frame->colorspace == AVCOL_SPC_UNSPECIFIED) {
+                        switch (getDecoderColorspace()) {
+                        case COLORSPACE_REC_601:
+                            frame->colorspace = AVCOL_SPC_SMPTE170M;
+                            break;
+                        case COLORSPACE_REC_709:
+                            frame->colorspace = AVCOL_SPC_BT709;
+                            break;
+                        case COLORSPACE_REC_2020:
+                            frame->colorspace = AVCOL_SPC_BT2020_NCL;
+                            break;
+                        }
+
+                        // HDR forces BT.2020 regardless of decoder preference
+                        if (LiGetCurrentHostDisplayHdrMode()) {
+                            frame->colorspace = AVCOL_SPC_BT2020_NCL;
+                        }
+                    }
+                    if (frame->color_primaries == AVCOL_PRI_UNSPECIFIED) {
+                        switch (frame->colorspace) {
+                        case AVCOL_SPC_BT709:
+                            frame->color_primaries = AVCOL_PRI_BT709;
+                            break;
+                        case AVCOL_SPC_SMPTE170M:
+                            frame->color_primaries = AVCOL_PRI_SMPTE170M;
+                            break;
+                        case AVCOL_SPC_BT2020_NCL:
+                        case AVCOL_SPC_BT2020_CL:
+                            frame->color_primaries = AVCOL_PRI_BT2020;
+                            break;
+                        default:
+                            break;
+                        }
+                    }
+                    if (frame->color_trc == AVCOL_TRC_UNSPECIFIED) {
+                        switch (frame->colorspace) {
+                        case AVCOL_SPC_BT709:
+                            frame->color_trc = AVCOL_TRC_BT709;
+                            break;
+                        case AVCOL_SPC_SMPTE170M:
+                            frame->color_trc = AVCOL_TRC_SMPTE170M;
+                            break;
+                        case AVCOL_SPC_BT2020_NCL:
+                        case AVCOL_SPC_BT2020_CL:
+                            frame->color_trc = AVCOL_TRC_BT2020_10;
+                            break;
+                        default:
+                            break;
+                        }
+
+                        // HDR forces SMPTE 2084 PQ regardless of decoder preference
+                        if (LiGetCurrentHostDisplayHdrMode()) {
+                            frame->color_trc = AVCOL_TRC_SMPTE2084;
                         }
                     }
 
