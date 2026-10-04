@@ -25,14 +25,17 @@ if /I "%BUILD_CONFIG%"=="debug" (
                 echo Signed release builds must not have unstaged changes!
                 exit /b 1
             )
+
+            if not defined SIGNTOOL_PARAMS (
+                echo A signtool parameter string must be specified in SIGNTOOL_PARAMS for signed release builds
+                exit /b 1
+            )
         ) else (
             echo Invalid build configuration - expected 'debug' or 'release'
             exit /b 1
         )
     )
 )
-
-set SIGNTOOL_PARAMS=sign /tr http://timestamp.digicert.com /td sha256 /fd sha256 /sha1 8b9d0d682ad9459e54f05a79694bc10f9876e297 /v
 
 set BUILD_ROOT=%cd%\build
 set SOURCE_ROOT=%cd%
@@ -65,7 +68,8 @@ mkdir %BUILD_FOLDER%
 mkdir %INSTALLER_FOLDER%
 
 rem Find Visual Studio and run vcvarsall.bat
-set VSWHERE="%SOURCE_ROOT%\scripts\vswhere.exe"
+call "%SOURCE_ROOT%\scripts\find-vswhere.bat"
+if !ERRORLEVEL! NEQ 0 goto Error
 for /f "usebackq delims=" %%i in (`%VSWHERE% -latest -property installationPath`) do (
     call "%%i\VC\Auxiliary\Build\vcvarsall.bat" x86
 )

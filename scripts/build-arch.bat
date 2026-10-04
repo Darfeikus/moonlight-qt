@@ -26,6 +26,11 @@ if /I "%BUILD_CONFIG%"=="debug" (
                 exit /b 1
             )
 
+            if not defined SIGNTOOL_PARAMS (
+                echo A signtool parameter string must be specified in SIGNTOOL_PARAMS for signed release builds
+                exit /b 1
+            )
+
             echo Updating dependencies
             powershell %cd%\setup-deps.ps1
             if !ERRORLEVEL! NEQ 0 (
@@ -41,15 +46,15 @@ if /I "%BUILD_CONFIG%"=="debug" (
 
 rem Locate qmake and determine if we're using qmake.exe or (host-)qmake.bat
 rem (host-)qmake.bat is an ARM64 forwarder to the x64 version of qmake.exe
-where qmake.bat
+where /q qmake.bat
 if !ERRORLEVEL! EQU 0 (
     set QMAKE_CMD=call qmake.bat
 ) else (
-    where host-qmake.bat
+    where /q host-qmake.bat
     if !ERRORLEVEL! EQU 0 (
         set QMAKE_CMD=call host-qmake.bat
     ) else (
-        where qmake.exe
+        where /q qmake.exe
         if !ERRORLEVEL! EQU 0 (
             set QMAKE_CMD=qmake.exe
         ) else (
@@ -104,8 +109,6 @@ if not x%QT_PATH:_arm64=%==x%QT_PATH% (
 
 echo Detected target architecture: %ARCH%
 
-set SIGNTOOL_PARAMS=sign /tr http://timestamp.digicert.com /td sha256 /fd sha256 /sha1 8b9d0d682ad9459e54f05a79694bc10f9876e297 /v
-
 set BUILD_ROOT=%cd%\build
 set SOURCE_ROOT=%cd%
 set BUILD_FOLDER=%BUILD_ROOT%\build-%ARCH%-%BUILD_CONFIG%
@@ -134,7 +137,8 @@ if /I "%VC_ARCH%" NEQ "%PROCESSOR_ARCHITECTURE%" (
 )
 
 rem Find Visual Studio and run vcvarsall.bat
-set VSWHERE="%SOURCE_ROOT%\scripts\vswhere.exe"
+call "%SOURCE_ROOT%\scripts\find-vswhere.bat"
+if !ERRORLEVEL! NEQ 0 goto Error
 for /f "usebackq delims=" %%i in (`%VSWHERE% -latest -property installationPath`) do (
     call "%%i\VC\Auxiliary\Build\vcvarsall.bat" %VC_ARCH%
 )
@@ -142,6 +146,7 @@ if !ERRORLEVEL! NEQ 0 goto Error
 
 rem Find VC redistributable DLLs
 for /f "usebackq delims=" %%i in (`%VSWHERE% -latest -find VC\Redist\MSVC\*\%ARCH%\Microsoft.VC*.CRT`) do set VC_REDIST_DLL_PATH=%%i
+if !ERRORLEVEL! NEQ 0 goto Error
 
 echo Cleaning output directories
 rmdir /s /q %DEPLOY_FOLDER%
@@ -165,9 +170,30 @@ pushd %BUILD_FOLDER%
 if !ERRORLEVEL! NEQ 0 goto Error
 popd
 
+rem Locate jom.exe or fall back to nmake.exe
+where /q jom.exe
+if !ERRORLEVEL! EQU 0 (
+    set JOM_CMD=jom.exe
+) else if exist "%QT_PATH%\..\..\..\Tools\QtCreator\bin\jom\jom.exe" (
+    set JOM_CMD="%QT_PATH%\..\..\..\Tools\QtCreator\bin\jom\jom.exe"
+) else if exist "%QT_PATH%\..\..\..\Tools\QtCreator\bin\jom.exe" (
+    set JOM_CMD="%QT_PATH%\..\..\..\Tools\QtCreator\bin\jom.exe"
+) else if exist "%QT_PATH%\..\..\..\Tools\jom\jom.exe" (
+    set JOM_CMD="%QT_PATH%\..\..\..\Tools\jom\jom.exe"
+) else (
+    where /q nmake.exe
+    if !ERRORLEVEL! EQU 0 (
+        echo jom.exe not found. Falling back to nmake.exe.
+        set JOM_CMD=nmake.exe
+    ) else (
+        echo Unable to find jom.exe or nmake.exe!
+        goto Error
+    )
+)
+
 echo Compiling Moonlight in %BUILD_CONFIG% configuration
 pushd %BUILD_FOLDER%
-%SOURCE_ROOT%\scripts\jom.exe %BUILD_CONFIG%
+!JOM_CMD! %BUILD_CONFIG%
 if !ERRORLEVEL! NEQ 0 goto Error
 popd
 
@@ -254,7 +280,7 @@ if "%SIGN%"=="1" (
     for /r "%DEPLOY_FOLDER%" %%f in (*.dll *.exe) do (
         set FILES_TO_SIGN=!FILES_TO_SIGN! %%f
     )
-    signtool %SIGNTOOL_PARAMS% !FILES_TO_SIGN!
+    signtool sign %SIGNTOOL_PARAMS% !FILES_TO_SIGN!
     if !ERRORLEVEL! NEQ 0 goto Error
 )
 
