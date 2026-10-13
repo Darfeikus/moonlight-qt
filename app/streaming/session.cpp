@@ -1631,8 +1631,11 @@ bool Session::startConnectionAsync()
     QByteArray siAppVersion = m_Computer->appVersion.toUtf8();
 
     // Provide the input handler with the address we're actually connecting to
-    // so capture/release commands can target the current host.
-    m_InputHandler->setHostAddress(m_Computer->activeAddress.address());
+    // so USB/IP requests can target the current host.
+    {
+        QReadLocker lock(&m_Computer->lock);
+        m_InputHandler->setHostAddress(QString::fromUtf8(hostnameStr), m_Computer->sshUser);
+    }
 
     SERVER_INFORMATION hostInfo;
     hostInfo.address = hostnameStr.data();

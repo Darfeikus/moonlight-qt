@@ -29,46 +29,105 @@ This fork adds two personal quality-of-life changes on top of upstream Moonlight
 
 Upstream releases mouse/keyboard capture with **Ctrl+Alt+Shift+Z**. This fork changes that shortcut to a single **Right Alt** press for convenience, and to match the host-ungrab key used in a typical VirtualBox configuration. Left Alt is unaffected and still passes through to the host normally. As with upstream, the shortcut is only active when running under a desktop environment (`WMUtils::isRunningDesktopEnvironment()`).
 
-### 2. Run a command on mouse capture / release (VirtualHere forwarding)
+### 2. USB/IP device forwarding (Linux)
 
-Moonlight can run an arbitrary shell command whenever it grabs or releases the mouse. The original use case is forwarding a **physical USB mouse** to the streaming host with [VirtualHere](https://www.virtualhere.com/) over SSH, so the hardware mouse is captured by the remote PC while streaming and returned to the local PC when you ungrab.
+On Linux, Moonlight can hand physical USB devices, such as a wireless mouse receiver, to the streaming PC with [USB/IP](https://www.kernel.org/doc/html/latest/usb/usbip_protocol.html) while the mouse is captured, and take them back when you release it. Pick the devices in **Settings → Input Settings → USB devices to capture**.
 
-The commands are read from two settings (or the equivalent environment variables, which take precedence):
+```text
+Moonlight  ->  usbip-bind.service (root, local socket)  ->  usbip bind/unbind here
+                                                        ->  usbip attach/detach on the streaming PC (over SSH)
+```
 
-| Setting key (config file) | Environment variable | Runs when |
-| --- | --- | --- |
-| `capturecommand` | `MOONLIGHT_CAPTURE_COMMAND` | Mouse capture is grabbed |
-| `releasecommand` | `MOONLIGHT_RELEASE_COMMAND` | Mouse capture is released |
-
-The literal token `{host}` in either command is replaced at runtime with the address of the PC currently being streamed to (the same address Moonlight connected on), so a single command works across multiple hosts. Commands are launched detached via `/bin/sh -c` (or `cmd /c` on Windows); leaving a command empty disables it for that transition.
-
-The config file lives at:
-- **Linux:** `~/.config/Moonlight Game Streaming Project/Moonlight.conf`
-- **macOS:** `~/Library/Preferences/com.moonlight-stream.Moonlight.plist`
-- **Windows:** registry under `HKCU\Software\Moonlight Game Streaming Project\Moonlight`
+Moonlight sends only the action (`capture` or `release`), the streaming PC's address and the device's vendor/product ID. It runs no shell commands and needs no helper script. The device is captured whenever Moonlight grabs the mouse and returned when it releases it (Right Alt, focus loss, stream end, quitting). Other platforms are unaffected: the setting is hidden and the code is not built.
 
 #### Requirements
 
-- **Passwordless, non-interactive command execution.** The command is run detached with no terminal, so it must succeed without prompting. For SSH this means key-based auth (no password) and the target host already in `known_hosts`.
-- **VirtualHere client** installed on each host you stream to, reachable at a known path, with the USB server running and the device visible in its device list.
+- Python 3.10 or later, OpenSSH, and the distribution's `usbip` tools including `usbipd.service` installed at `/usr/bin/usbip`, `/usr/bin/usbipd` and `/usr/bin/ssh` (Arch: `sudo pacman -S usbip openssh python`).
+- Noninteractive SSH from the account that runs Moonlight to each streaming PC, with its host key already in `known_hosts` (check with `ssh -o BatchMode=yes HOST true`). No SSH agent is used.
+- Streaming PCs: Windows with [USBip for Windows](https://github.com/vadimgrn/usbip-win2) (tested with 0.9.8.1) at `C:\Program Files\USBip\usbip.exe`, or Linux with `usbip`/`vhci_hcd`. The OS is detected over SSH, so no per-host platform setting is needed.
+- TCP 3240 on this machine must be reachable from the streaming PC. USB/IP itself is neither authenticated nor encrypted.
+- Exclusive access: a device is unavailable locally while captured. USB/IP exports the **entire device**, including all HID interfaces, so do not select a receiver shared with the keyboard you use for Right Alt.
 
-#### Example configuration (VirtualHere over SSH)
+#### Install
 
-Add these keys under the `[General]` section of the config file. The `{host}` token is substituted automatically; `USB Receiver` here is identified by its VirtualHere device address (find it by running the client with `-t "LIST"`):
-
-```ini
-capturecommand=ssh user@{host} "%USERPROFILE%\\Downloads\\vhui64.exe -t \"USE,SERVERNAME.DEVICEID\""
-releasecommand=ssh user@{host} "%USERPROFILE%\\Downloads\\vhui64.exe -t \"STOP USING ALL\""
-```
-
-Or, without editing the config file, via environment variables:
+Run the installer from the account that runs Moonlight; it needs root and infers that account from `sudo`:
 
 ```sh
-export MOONLIGHT_CAPTURE_COMMAND='ssh user@{host} "%USERPROFILE%\Downloads\vhui64.exe -t \"USE,SERVERNAME.DEVICEID\""'
-export MOONLIGHT_RELEASE_COMMAND='ssh user@{host} "%USERPROFILE%\Downloads\vhui64.exe -t \"STOP USING ALL\""'
+sudo scripts/install-usbip-service.sh
 ```
 
-Using `%USERPROFILE%` (rather than an absolute path) keeps the command portable across hosts as long as the VirtualHere client lives in each user's `Downloads` folder. See the [VirtualHere client API](https://www.virtualhere.com/client_api) for the full list of `-t` commands.
+It installs `/usr/local/lib/usbip-bind.py` and `usbip-bind.service` (root-owned), then enables and starts the service. `usbip-bind.service` starts the standard `usbipd.service` as a dependency, so it is the only unit you enable; no per-device units are needed. No device is exported until requested, and there are no group, polkit, sudoers or firewall changes on this machine.
+
+The service listens on `/run/usbip-bind/control.sock`, owned by that account (mode 0600). It also checks each caller's Unix credentials, so only that account (or root) can capture or release devices. SSH runs as that account, so its keys, `known_hosts` and `~/.ssh/config` apply.
+
+#### SSH user (optional)
+
+Moonlight connects to a streaming PC on an address (an IP or a name). Only IPv4 addresses and names that resolve to IPv4 are supported. By default the service runs plain `ssh ADDRESS`, i.e. your default account, or whatever `~/.ssh/config` says for that address. To use a different SSH account for a PC, right-click it in Moonlight, choose **Specify SSH user**, enter the account and press OK. Leave it empty to go back to the default. The value is stored with that PC in the Moonlight config and applies from the next capture, with no service restart and no root-owned file.
+
+A dual-boot PC that uses different accounts per OS needs the setting changed when you switch OS (or add it as two entries in Moonlight, one per OS). The OS itself is detected automatically.
+
+**Linux streaming PCs** must run `usbip attach/detach` as root. If the SSH account is not root, the service uses the attach agent if it is installed on that PC, and otherwise `sudo -n /usr/bin/usbip`.
+
+The attach agent is a small root service that needs no sudo rule. It is a single file: copy `scripts/usbip-attach.py` to the streaming PC and, as the account Moonlight's PC logs in with over SSH, run:
+
+```sh
+sudo python3 usbip-attach.py install
+```
+
+It installs `/usr/local/bin/usbip-attach` and `usbip-attach.service` (root-owned), loads `vhci_hcd`, and starts the service on `/run/usbip-attach/control.sock` (mode 0600, owned by that account, with a Unix-credentials check). The agent only runs `/usr/bin/usbip` as `port`, `attach -r ADDRESS -b BUSID` or `detach -p PORT`, with validated arguments, and nothing else. Moonlight's service detects it on every capture, so nothing needs configuring. `sudo python3 usbip-attach.py uninstall` removes it. Because that account can then attach USB devices from any reachable USB/IP server on that PC, install it only for accounts you would trust with that.
+
+Without the agent, give that account a one-time passwordless rule limited to the three commands the service runs (replace `USER`), or set the PC's SSH user to `root`:
+
+```sh
+echo 'USER ALL=(root) NOPASSWD: /usr/bin/usbip port, /usr/bin/usbip attach -r * -b *, /usr/bin/usbip detach -p *' | sudo tee /etc/sudoers.d/moonlight-usbip
+sudo chmod 0440 /etc/sudoers.d/moonlight-usbip
+```
+
+#### Choosing devices
+
+Open **Settings → Input Settings → USB devices to capture** and tick the devices. The list comes from the service (`usbip list -l`) and is refreshed whenever you open it. A saved device that is unplugged stays listed as "not connected". Devices that share a vendor/product ID with another connected device are disabled, because they cannot be told apart safely. If the service is not running, the dialog says so. Selections are stored as `usbipdevices` (for example `046d:c547`) in the Moonlight config file:
+
+- **Linux:** `~/.config/Moonlight Game Streaming Project/Moonlight.conf`
+
+#### How it behaves
+
+- Capture first probes the streaming PC over SSH (OS, existing imports), and only then binds the device locally, so an unreachable PC leaves the device local. It then attaches remotely and verifies the imported port. Release detaches that exact port, then unbinds locally. The OS and SSH account used are saved per device under `/var/lib/usbip-bind`, so release uses the same ones even if you change the SSH user meanwhile.
+- Requests run one at a time. Repeated captures do not toggle the device back off, and a repeated release is harmless.
+- The service never uses `detach --all`, retries, monitors connections or recovers from crashes. Windows attach uses `--once`. A failed capture can leave a device exported until the next release; a timed-out SSH command may still complete remotely. A failed remote detach still unbinds locally and keeps the saved state so you can inspect it or release again.
+- Moonlight waits up to 20 seconds when quitting so the final release is delivered.
+
+Windows `usbip.exe` commands the service runs (shown for manual testing; replace the placeholders with real values, never assume a port number and never use `detach --all`):
+
+```cmd
+"C:\Program Files\USBip\usbip.exe" list -r THIS_PC_ADDRESS
+"C:\Program Files\USBip\usbip.exe" attach -r THIS_PC_ADDRESS -b BUS_ID --once --terse
+"C:\Program Files\USBip\usbip.exe" port
+"C:\Program Files\USBip\usbip.exe" detach -p ATTACHED_PORT
+```
+
+`--once` disables Windows attachment retries and `--terse` prints the attached port.
+
+#### Troubleshooting, uninstall and tests
+
+Failures appear in Moonlight's log (`USB/IP capture failed: ...`) and in the service journal:
+
+```sh
+journalctl -u usbip-bind.service
+```
+
+Common causes: the service is not running (the Settings list says so), SSH to the streaming PC fails non-interactively (try `ssh -o BatchMode=yes ADDRESS true` as your user), the SSH user set for that PC in Moonlight is wrong, or a Linux target has neither the attach agent (`systemctl status usbip-attach.service` there) nor the `sudo` rule above.
+
+To uninstall, first release any captured devices (the installer refuses otherwise). `/var/lib/usbip-bind` is left in place, and `usbipd.service` and the `usbip` packages are untouched:
+
+```sh
+sudo scripts/install-usbip-service.sh --uninstall
+```
+
+Run the service tests without touching a real device:
+
+```sh
+python3 -m unittest discover -s scripts/tests -p 'test_*.py'
+```
 
 ## Downloads
 - [Windows, macOS, and Steam Link](https://github.com/moonlight-stream/moonlight-qt/releases)

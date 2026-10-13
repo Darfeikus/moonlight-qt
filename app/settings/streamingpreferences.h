@@ -11,6 +11,9 @@ class StreamingPreferences : public QObject
 public:
     static StreamingPreferences* get(QQmlEngine *qmlEngine = nullptr);
 
+    // Lowercases, validates ("vendor:product") and de-duplicates device IDs
+    static QStringList normalizeUsbipDevices(const QStringList& devices);
+
     Q_INVOKABLE static int
     getDefaultBitrate(int width, int height, int fps, bool yuv444);
 
@@ -157,6 +160,7 @@ public:
     Q_PROPERTY(bool keepAwake MEMBER keepAwake NOTIFY keepAwakeChanged)
     Q_PROPERTY(CaptureSysKeysMode captureSysKeysMode MEMBER captureSysKeysMode NOTIFY captureSysKeysModeChanged)
     Q_PROPERTY(Language language MEMBER language NOTIFY languageChanged);
+    Q_PROPERTY(QStringList usbipDevices MEMBER usbipDevices NOTIFY usbipDevicesChanged)
 
     Q_INVOKABLE bool retranslate();
 
@@ -201,10 +205,9 @@ public:
     CaptureSysKeysMode captureSysKeysMode;
     RendererSelection rendererSelection;
 
-    // Advanced (config-file / environment only): external commands run when the
-    // mouse capture state changes. Empty string disables the respective command.
-    QString captureCommand;
-    QString releaseCommand;
+    // USB devices ("vendor:product", lowercase hex) forwarded to the streaming PC
+    // through the USB/IP service while the mouse is captured (Linux only)
+    QStringList usbipDevices;
 
 signals:
     void displayModeChanged();
@@ -243,6 +246,7 @@ signals:
     void keepAwakeChanged();
     void languageChanged();
     void rendererSelectionChanged();
+    void usbipDevicesChanged();
 
 private:
     explicit StreamingPreferences(QQmlEngine *qmlEngine);

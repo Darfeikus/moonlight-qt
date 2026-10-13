@@ -146,7 +146,7 @@ public:
 
     void setCaptureActive(bool active);
 
-    void setHostAddress(const QString& address);
+    void setHostAddress(const QString& address, const QString& sshUser);
 
     bool isMouseInVideoRegion(int mouseX, int mouseY, int windowWidth = -1, int windowHeight = -1);
 
@@ -190,7 +190,7 @@ private:
 
     void performSpecialKeyCombo(KeyCombo combo);
 
-    void dispatchCaptureCommand(bool active);
+    void dispatchUsbipCapture(bool active);
 
     static
     Uint32 longPressTimerCallback(Uint32 interval, void* param);
@@ -231,9 +231,9 @@ private:
     StreamingPreferences::CaptureSysKeysMode m_CaptureSystemKeysMode;
     int m_MouseCursorCapturedVisibilityState;
 
-    QString m_CaptureCommand;
-    QString m_ReleaseCommand;
+    QStringList m_UsbipDevices;
     QString m_HostAddress;
+    QString m_HostSshUser;
     bool m_HardwareCaptureForwarded;
 
     struct {

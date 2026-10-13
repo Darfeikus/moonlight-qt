@@ -8,7 +8,10 @@
 #include <QtGlobal>
 #include <QDir>
 #include <QGuiApplication>
-#include <QProcess>
+
+#ifdef Q_OS_LINUX
+#include "streaming/usbip/usbipclient.h"
+#endif
 
 SdlInputHandler::SdlInputHandler(StreamingPreferences& prefs, int streamWidth, int streamHeight)
     : m_MultiController(prefs.multiController),
@@ -24,8 +27,7 @@ SdlInputHandler::SdlInputHandler(StreamingPreferences& prefs, int streamWidth, i
       m_KeyboardCaptureActive(false),
       m_CaptureSystemKeysMode(prefs.captureSysKeysMode),
       m_MouseCursorCapturedVisibilityState(SDL_DISABLE),
-      m_CaptureCommand(prefs.captureCommand),
-      m_ReleaseCommand(prefs.releaseCommand),
+      m_UsbipDevices(prefs.usbipDevices),
       m_HardwareCaptureForwarded(false),
       m_LongPressTimer(0),
       m_StreamWidth(streamWidth),
@@ -407,18 +409,19 @@ void SdlInputHandler::setCaptureActive(bool active)
     // Now update the keyboard grab
     updateKeyboardGrabState();
 
-    // Run the configured external command on capture state transitions
-    dispatchCaptureCommand(active);
+    // Forward the selected USB devices on capture state transitions
+    dispatchUsbipCapture(active);
 }
 
-void SdlInputHandler::setHostAddress(const QString& address)
+void SdlInputHandler::setHostAddress(const QString& address, const QString& sshUser)
 {
     m_HostAddress = address;
+    m_HostSshUser = sshUser;
 }
 
-void SdlInputHandler::dispatchCaptureCommand(bool active)
+void SdlInputHandler::dispatchUsbipCapture(bool active)
 {
-    // Only act on genuine transitions to avoid duplicate invocations from
+    // Only act on genuine transitions to avoid duplicate requests from
     // repeated same-state calls to setCaptureActive().
     if (active == m_HardwareCaptureForwarded) {
         return;
@@ -426,34 +429,21 @@ void SdlInputHandler::dispatchCaptureCommand(bool active)
 
     m_HardwareCaptureForwarded = active;
 
-    QString command = active ? m_CaptureCommand : m_ReleaseCommand;
-    if (command.isEmpty()) {
-        // Feature disabled for this transition
+#ifdef Q_OS_LINUX
+    if (m_UsbipDevices.isEmpty() || m_HostAddress.isEmpty()) {
         return;
     }
 
-    // Substitute the address of the host we're currently streaming to. This
-    // lets a single configured command target whichever PC we're remoting into.
-    command.replace(QLatin1String("{host}"), m_HostAddress);
-
-    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                "Running mouse %s command: %s",
-                active ? "capture" : "release",
-                command.toUtf8().constData());
-
-    // Run detached and asynchronously so we never stall the event/render thread
-    // and so the release command's process (e.g. ssh) can complete even while
-    // Moonlight itself is exiting.
-#ifdef Q_OS_WIN
-    bool started = QProcess::startDetached("cmd", { "/c", command });
-#else
-    bool started = QProcess::startDetached("/bin/sh", { "-c", command });
-#endif
-    if (!started) {
-        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-                     "Failed to launch mouse %s command",
-                     active ? "capture" : "release");
+    // The client queues these on its own worker thread, so this never stalls
+    // the event/render thread, and the app drains it before exiting.
+    UsbipClient* client = UsbipClient::get();
+    for (const QString& device : m_UsbipDevices) {
+        QStringList ids = device.split(':');
+        if (ids.size() == 2) {
+            client->submit(active ? "capture" : "release", m_HostAddress, m_HostSshUser, ids[0], ids[1]);
+        }
     }
+#endif
 }
 
 void SdlInputHandler::handleTouchFingerEvent(SDL_TouchFingerEvent* event)

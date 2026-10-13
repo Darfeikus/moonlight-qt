@@ -6,6 +6,7 @@
 #include <QCoreApplication>
 #include <QLocale>
 #include <QReadWriteLock>
+#include <QRegularExpression>
 #include <QtMath>
 
 #include <QtDebug>
@@ -52,8 +53,7 @@
 #define SER_KEEPAWAKE "keepawake"
 #define SER_LANGUAGE "language"
 #define SER_RENDERER "renderer"
-#define SER_CAPTURECMD "capturecommand"
-#define SER_RELEASECMD "releasecommand"
+#define SER_USBIPDEVICES "usbipdevices"
 
 #define CURRENT_DEFAULT_VER 2
 
@@ -174,14 +174,7 @@ void StreamingPreferences::reload()
     language = static_cast<Language>(settings.value(SER_LANGUAGE,
                                                     static_cast<int>(Language::LANG_AUTO)).toInt());
 
-    // Commands run on mouse capture state changes. Environment variables take
-    // precedence over the config file so they can be overridden per-launch.
-    captureCommand = qEnvironmentVariableIsSet("MOONLIGHT_CAPTURE_COMMAND")
-                         ? qEnvironmentVariable("MOONLIGHT_CAPTURE_COMMAND")
-                         : settings.value(SER_CAPTURECMD, QString()).toString();
-    releaseCommand = qEnvironmentVariableIsSet("MOONLIGHT_RELEASE_COMMAND")
-                         ? qEnvironmentVariable("MOONLIGHT_RELEASE_COMMAND")
-                         : settings.value(SER_RELEASECMD, QString()).toString();
+    usbipDevices = normalizeUsbipDevices(settings.value(SER_USBIPDEVICES).toStringList());
 
     // Perform default settings updates as required based on last default version
     if (defaultVer < 1) {
@@ -372,6 +365,21 @@ void StreamingPreferences::save()
     settings.setValue(SER_SWAPFACEBUTTONS, swapFaceButtons);
     settings.setValue(SER_CAPTURESYSKEYS, captureSysKeysMode);
     settings.setValue(SER_KEEPAWAKE, keepAwake);
+    settings.setValue(SER_USBIPDEVICES, usbipDevices);
+}
+
+QStringList StreamingPreferences::normalizeUsbipDevices(const QStringList& devices)
+{
+    static const QRegularExpression validId("^[0-9a-f]{4}:[0-9a-f]{4}$");
+
+    QStringList normalized;
+    for (const QString& device : devices) {
+        QString id = device.trimmed().toLower();
+        if (validId.match(id).hasMatch() && !normalized.contains(id)) {
+            normalized.append(id);
+        }
+    }
+    return normalized;
 }
 
 int StreamingPreferences::getDefaultBitrate(int width, int height, int fps, bool yuv444)

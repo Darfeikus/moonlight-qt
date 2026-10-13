@@ -1462,6 +1462,11 @@ Flickable {
                         StreamingPreferences.reverseScrollDirection = checked
                     }
                 }
+
+                UsbipDevicePicker {
+                    id: usbipDevicePicker
+                    width: parent.width
+                }
             }
         }
 

@@ -10,6 +10,7 @@
 #include <QThreadPool>
 #include <QCoreApplication>
 #include <QRandomGenerator>
+#include <QRegularExpression>
 
 #define SER_HOSTS "hosts"
 #define SER_HOSTS_BACKUP "hostsbackup"
@@ -555,6 +556,25 @@ void ComputerManager::renameHost(NvComputer* computer, QString name)
 
     // Notify the UI of the state change
     handleComputerStateChanged(computer);
+}
+
+bool ComputerManager::setSshUser(NvComputer* computer, QString user)
+{
+    user = user.trimmed();
+
+    static const QRegularExpression validUser("^[A-Za-z_][A-Za-z0-9_.-]*$");
+    if (!user.isEmpty() && !validUser.match(user).hasMatch()) {
+        return false;
+    }
+
+    {
+        QWriteLocker lock(&computer->lock);
+
+        computer->sshUser = user;
+    }
+
+    handleComputerStateChanged(computer);
+    return true;
 }
 
 void ComputerManager::clientSideAttributeUpdated(NvComputer* computer)
