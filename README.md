@@ -21,11 +21,6 @@ You can follow development on our [Discord server](https://moonlight-stream.org/
  - Support for both pointer capture (for games) and direct mouse control (for remote desktop)
  - Support for passing system-wide keyboard shortcuts like Alt+Tab to the host
  
-## Fork shortcut
-
-On desktop environments, press **Right Alt** to release captured mouse and keyboard
-input instead of **Ctrl+Alt+Shift+Z**. Left Alt continues to pass through to the host.
-
 ## Downloads
 - [Windows, macOS, and Steam Link](https://github.com/moonlight-stream/moonlight-qt/releases)
 - [Snap (for Ubuntu-based Linux distros)](https://snapcraft.io/moonlight)
@@ -110,6 +105,11 @@ for different architectures, which handle building deps and extra linking for yo
     * To create an embedded build for a single-purpose device, use `qmake6 "CONFIG+=embedded" moonlight-qt.pro` and build normally.
         * This build will lack windowed mode, Discord/Help links, and other features that don't make sense on an embedded device.
         * For platforms with poor GPU performance, add `"CONFIG+=gpuslow"` to prefer direct KMSDRM rendering over GL/Vulkan renderers. Direct KMSDRM rendering can use dedicated YUV/RGB conversion and scaling hardware rather than slower GPU shaders for these operations.
+
+## Fork shortcut
+
+On desktop environments, press **Right Alt** to release captured mouse and keyboard
+input instead of **Ctrl+Alt+Shift+Z**. Left Alt continues to pass through to the host.
 
 ## Contribute
 1. Fork us
