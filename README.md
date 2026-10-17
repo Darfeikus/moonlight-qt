@@ -85,12 +85,12 @@ Open **Settings → Input Settings → USB devices to capture** and tick the dev
 
 - Capture first probes the streaming PC over SSH (OS if not yet known, existing imports), and only then binds the device locally, so an unreachable PC leaves the device local. If the device is still exported from an earlier attempt, it is unbound first. Attach and port verification then run in a single SSH call. The OS and SSH account used are saved per device under `/var/lib/usbip-bind`, so release uses the same ones even if you change the SSH user meanwhile.
 - A capture that fails after binding is rolled back: anything attached remotely is detached and the device is unbound locally.
-- Release unbinds locally first, so the device is back immediately, then detaches the remote port as a best effort. A Linux streaming PC clears the import on its own; on Windows it looks like the device was unplugged. A failed remote detach is only logged, and any leftover import of this machine's device is detached at the next capture on that PC. Windows attach uses `--once`, so it never tries to reconnect.
+- Release unbinds locally first, so the device is back immediately, then detaches the remote port as a best effort. A Linux streaming PC clears the import on its own; on Windows it looks like the device was unplugged. On Windows, USBip for Windows then keeps trying to re-attach the device (its `--once` option only covers the first connection), so release also runs `attach --stop` for that device in the same SSH call. A failed remote step is only logged. Every capture on a Windows PC runs `--stop` before binding too, so leftover attempts (for example after a release while that PC was unreachable) cannot take the device, and any leftover import of this machine's device is detached.
 - If the saved device was unplugged or moved to another USB port, release leaves that bus ID alone and just clears the saved state.
 - Capturing for a different streaming PC (or a different SSH user) releases the device from the previous one first. If the previous PC cannot be reached, it is released locally only. The newest request always wins.
 - Requests run one at a time. Repeated captures do not toggle the device back off, and a repeated release is harmless. A capture and release queued for the same device that have not started yet cancel each other out.
 - SSH connects with a 3 second timeout, and each command is limited to 6 seconds; a hung command also closes a stale shared SSH connection (`ControlMaster`). Sharing SSH connections in `~/.ssh/config` (`ControlMaster auto`, `ControlPersist`) makes each step noticeably faster.
-- Ownership is kept in memory. When the service starts, any device left bound from a previous run is unbound locally; a leftover remote import is cleaned at the next capture on that PC. Moonlight waits up to 3 seconds when quitting for a request in progress; closing its connection releases the rest.
+- Ownership is kept in memory. When the service starts, any device left bound from a previous run is unbound locally; leftover remote imports and Windows re-attach attempts are cleaned at the next capture on that PC. Moonlight waits up to 3 seconds when quitting for a request in progress; closing its connection releases the rest.
 - The service never uses `detach --all`, and only detaches ports whose remote bus ID matches this machine and device.
 
 Windows `usbip.exe` commands the service runs (shown for manual testing; replace the placeholders with real values, never assume a port number and never use `detach --all`):
@@ -98,11 +98,12 @@ Windows `usbip.exe` commands the service runs (shown for manual testing; replace
 ```cmd
 "C:\Program Files\USBip\usbip.exe" list -r THIS_PC_ADDRESS
 "C:\Program Files\USBip\usbip.exe" attach -r THIS_PC_ADDRESS -b BUS_ID --once --terse
+"C:\Program Files\USBip\usbip.exe" attach -r THIS_PC_ADDRESS -b BUS_ID --stop
 "C:\Program Files\USBip\usbip.exe" port
 "C:\Program Files\USBip\usbip.exe" detach -p ATTACHED_PORT
 ```
 
-`--once` disables Windows attachment retries and `--terse` prints the attached port.
+`--once` only stops Windows from retrying if the first connection fails, and `--terse` prints the attached port. Once attached, Windows retries whenever the connection drops until `--stop` is run for that device; it succeeds even when nothing is retrying. If this machine's `usbipd` log (`journalctl -u usbipd.service`) keeps showing connections from a PC that is not streaming, run that `--stop` command on it.
 
 #### Troubleshooting, uninstall and tests
 

@@ -340,7 +340,7 @@ def capture(address, user, path, vendor, product, ssh_account, platform=None):
     server = local_address(address)
     # Every remote probe happens before binding, so a failure leaves the device local.
     try:
-        ports = imported_ports(remote_one(target, platform, ["port"], ssh_account))
+        ports = remote_ports(target, platform, server, busid, ssh_account)
     except (HostUnreachable, subprocess.TimeoutExpired):
         raise
     except ERRORS:
@@ -352,7 +352,7 @@ def capture(address, user, path, vendor, product, ssh_account, platform=None):
             raise
         logging.info("%s runs %s, not %s", address, detected, platform)
         platform = detected
-        ports = imported_ports(remote_one(target, platform, ["port"], ssh_account))
+        ports = remote_ports(target, platform, server, busid, ssh_account)
     expected = (server, 3240, busid)
     leftovers = [port for port, location in ports.items() if location == expected]
     state = {
@@ -402,9 +402,22 @@ def capture(address, user, path, vendor, product, ssh_account, platform=None):
     return platform
 
 
+def remote_ports(target, platform, server, busid, ssh_account):
+    """The streaming PC's imported ports, after ending any Windows attempts to
+    re-attach this device. usbip-win2 keeps retrying an attachment whose
+    connection dropped (--once only covers the first connection), and a retry
+    could take the device as soon as it is bound again."""
+    commands = [["port"]]
+    if platform == "windows":
+        commands.insert(0, ["attach", "-r", server, "-b", busid, "--stop"])
+    return imported_ports(remote_usbip(target, platform, commands, ssh_account)[-1])
+
+
 def detach_remote(state, ssh_account):
     target = ssh_target(state["host"], state["ssh_user"])
-    ports = imported_ports(remote_one(target, state["platform"], ["port"], ssh_account))
+    ports = remote_ports(
+        target, state["platform"], state["server"], state["busid"], ssh_account
+    )
     expected = (state["server"], 3240, state["busid"])
     port = state["port"]
     if port is None:
@@ -446,7 +459,8 @@ def release(path, vendor, product, ssh_account, force=False):
         detach_remote(state, ssh_account)
     except ERRORS as error:
         # Unbinding already ended the USB/IP connection, so the streaming PC
-        # drops the device by itself; this only tidies up its port list.
+        # drops the device by itself. A Windows PC keeps trying to re-attach
+        # until the next capture there stops it.
         logging.warning("could not detach on %s: %s", state["host"], error)
 
 

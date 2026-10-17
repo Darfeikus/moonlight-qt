@@ -84,6 +84,16 @@ class FakeHost:
         self.imports = {}
         self.errors = {}
         self.calls = []
+        # (server, busid) pairs usbip-win2 keeps trying to re-attach
+        self.retrying = set()
+
+    def connection_lost(self, server, busid):
+        """What a Windows PC does when the exporting side goes away."""
+        for port, location in list(self.imports.items()):
+            if location == (server, 3240, busid):
+                del self.imports[port]
+                if self.platform == "windows":
+                    self.retrying.add((server, busid))
 
     def listing(self):
         return "Imported USB devices\n====================\n" + "".join(
@@ -94,14 +104,18 @@ class FakeHost:
         )
 
     def __call__(self, target, platform, commands, ssh_account=None):
-        self.calls.append((target, platform, [args[0] for args in commands]))
+        names = ["stop" if "--stop" in args else args[0] for args in commands]
+        self.calls.append((target, platform, names))
         outputs = []
-        for args in commands:
+        for name, args in zip(names, commands):
             if platform != self.platform:
                 raise RuntimeError("'sh' is not recognized as an internal or external command")
-            if args[0] in self.errors:
-                raise self.errors[args[0]]
-            if args[0] == "port":
+            if name in self.errors:
+                raise self.errors[name]
+            if name == "stop":
+                self.retrying.discard((args[2], args[4]))
+                outputs.append("")
+            elif name == "port":
                 outputs.append(self.listing())
             elif args[0] == "attach":
                 port = 1 if platform == "windows" else 0
@@ -128,6 +142,8 @@ class HandoffTests(unittest.TestCase):
         self.exported = False
         self.events = []
         self.host = FakeHost()
+        self.drops_on_unbind = False
+        self.retrying_at_bind = None
         self.remote_mock = Mock(side_effect=self.remote)
         self.detect_mock = Mock(side_effect=lambda target, account=None: self.host.platform)
         for name, mock in (
@@ -157,6 +173,10 @@ class HandoffTests(unittest.TestCase):
         if action in ("bind", "unbind"):
             self.events.append(action)
             self.exported = action == "bind"
+            if action == "bind":
+                self.retrying_at_bind = set(self.host.retrying)
+            elif self.drops_on_unbind:
+                self.host.connection_lost(SERVER, busid)
         return {"busid": busid, "exported": self.exported}
 
     def same_device(self, busid, vendor, product):
@@ -197,6 +217,42 @@ class HandoffTests(unittest.TestCase):
         self.assertFalse(self.state.exists())
         # The device comes back before any round trip to the streaming PC.
         self.assertEqual(self.events[0], "unbind")
+
+    def test_windows_release_stops_reattach_attempts(self):
+        self.drops_on_unbind = True
+        self.capture()
+        self.events.clear()
+        self.release()
+        self.assertEqual(self.events[0], "unbind")
+        self.assertEqual(self.host.imports, {})
+        self.assertEqual(self.host.retrying, set())
+        self.assertEqual(self.remote_mock.call_args.args[2], [
+            ["attach", "-r", SERVER, "-b", BUSID, "--stop"], ["port"],
+        ])
+
+    def test_capture_stops_leftover_reattach_attempts_before_binding(self):
+        # Left by a release while this PC was unreachable over SSH
+        self.host.retrying.add((SERVER, BUSID))
+        self.capture(platform="windows")
+        self.assertEqual(self.retrying_at_bind, set())
+        self.assertEqual(self.host.commands()[:2], ["stop", "port"])
+        self.assertEqual(self.remote_mock.call_count, 2)
+
+    def test_forced_release_leaves_attempts_for_the_next_capture(self):
+        self.drops_on_unbind = True
+        self.capture()
+        self.release(force=True)
+        self.assertEqual(self.host.retrying, {(SERVER, BUSID)})
+        self.capture()
+        self.assertEqual(self.retrying_at_bind, set())
+
+    def test_linux_never_sends_stop(self):
+        self.host.platform = "linux"
+        self.drops_on_unbind = True
+        self.capture()
+        self.release()
+        self.assertNotIn("stop", self.host.commands())
+        self.assertEqual(self.host.retrying, set())
 
     def test_capture_takes_two_round_trips_when_the_os_is_known(self):
         self.capture(platform="windows")
@@ -445,7 +501,7 @@ class HandoffTests(unittest.TestCase):
         self.assertFalse(self.state.exists())
         # Verifying found the host gone, so only the fresh capture's probe tries
         # it again; the cleanup does not wait on it.
-        self.assertEqual(self.host.commands(), ["port", "port"])
+        self.assertEqual(self.host.commands(), ["port", "stop", "port"])
 
     def test_leftover_import_and_export_are_cleared_before_attaching(self):
         self.exported = True
