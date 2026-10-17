@@ -30,13 +30,13 @@ Moonlight  ->  usbip-bind.service (root, local socket)  ->  usbip bind/unbind he
                                                         ->  usbip attach/detach on the streaming PC (over SSH)
 ```
 
-Moonlight sends only the action (`capture` or `release`), the streaming PC's address and the device's vendor/product ID. It runs no shell commands and needs no helper script. The device is captured whenever Moonlight grabs the mouse and returned when it releases it (the ungrab shortcut, focus loss, stream end, quitting). Other platforms are unaffected: the setting is hidden and the code is not built.
+Moonlight sends only the action (`capture` or `release`), the streaming PC's address, its SSH user and OS if known, and the device's vendor/product ID. It runs no shell commands and needs no helper script. The device is captured whenever Moonlight grabs the mouse and returned when it releases it (the ungrab shortcut, focus loss, stream end, quitting). Moonlight keeps one connection open to the service, and the service releases everything captured through it when that connection closes, so devices also come back if Moonlight crashes or is killed. Other platforms are unaffected: the setting is hidden and the code is not built.
 
 #### Requirements
 
 - Python 3.10 or later, OpenSSH, and the distribution's `usbip` tools including `usbipd.service` installed at `/usr/bin/usbip`, `/usr/bin/usbipd` and `/usr/bin/ssh` (Arch: `sudo pacman -S usbip openssh python`).
 - Noninteractive SSH from the account that runs Moonlight to each streaming PC, with its host key already in `known_hosts` (check with `ssh -o BatchMode=yes HOST true`). No SSH agent is used.
-- Streaming PCs: Windows with [USBip for Windows](https://github.com/vadimgrn/usbip-win2) (tested with 0.9.8.1) at `C:\Program Files\USBip\usbip.exe`, or Linux with `usbip`/`vhci_hcd`. The OS is detected over SSH, so no per-host platform setting is needed.
+- Streaming PCs: Windows with [USBip for Windows](https://github.com/vadimgrn/usbip-win2) (tested with 0.9.8.1) at `C:\Program Files\USBip\usbip.exe`, or Linux with `usbip`/`vhci_hcd`. The OS is detected over SSH on the first capture and remembered for that PC, so no per-host platform setting is needed.
 - TCP 3240 on this machine must be reachable from the streaming PC. USB/IP itself is neither authenticated nor encrypted.
 - Exclusive access: a device is unavailable locally while captured. USB/IP exports the **entire device**, including all HID interfaces, so do not select a receiver shared with the keyboard you use for the ungrab shortcut.
 
@@ -56,9 +56,9 @@ The service listens on `/run/usbip-bind/control.sock`, owned by that account (mo
 
 Moonlight connects to a streaming PC on an address (an IP or a name). Only IPv4 addresses and names that resolve to IPv4 are supported. By default the service runs plain `ssh ADDRESS`, i.e. your default account, or whatever `~/.ssh/config` says for that address. To use a different SSH account for a PC, right-click it in Moonlight, choose **Specify SSH user**, enter the account and press OK. Leave it empty to go back to the default. The value is stored with that PC in the Moonlight config and applies from the next capture, with no service restart and no root-owned file.
 
-A dual-boot PC that uses different accounts per OS needs the setting changed when you switch OS (or add it as two entries in Moonlight, one per OS). The OS itself is detected automatically.
+A dual-boot PC that uses different accounts per OS needs the setting changed when you switch OS (or add it as two entries in Moonlight, one per OS). The OS itself is detected automatically; if the remembered OS stops working, the service detects it again and Moonlight updates it.
 
-**Linux streaming PCs** must run `usbip attach/detach` as root. If the SSH account is not root, the service uses the attach agent if it is installed on that PC, and otherwise `sudo -n /usr/bin/usbip`.
+**Linux streaming PCs** must run `usbip attach/detach` as root. If the SSH account is not root, each command uses the attach agent if it is installed on that PC, and otherwise `sudo -n /usr/bin/usbip`. The choice is made on that PC within the same SSH call, under `sh -c`, so it works with any login shell.
 
 The attach agent is a small root service that needs no sudo rule. It is a single file: copy `scripts/usbip-attach.py` to the streaming PC and, as the account Moonlight's PC logs in with over SSH, run:
 
@@ -66,7 +66,7 @@ The attach agent is a small root service that needs no sudo rule. It is a single
 sudo python3 usbip-attach.py install
 ```
 
-It installs `/usr/local/bin/usbip-attach` and `usbip-attach.service` (root-owned), loads `vhci_hcd`, and starts the service on `/run/usbip-attach/control.sock` (mode 0600, owned by that account, with a Unix-credentials check). The agent only runs `/usr/bin/usbip` as `port`, `attach -r ADDRESS -b BUSID` or `detach -p PORT`, with validated arguments, and nothing else. Moonlight's service detects it on every capture, so nothing needs configuring. `sudo python3 usbip-attach.py uninstall` removes it. Because that account can then attach USB devices from any reachable USB/IP server on that PC, install it only for accounts you would trust with that.
+It installs `/usr/local/bin/usbip-attach` and `usbip-attach.service` (root-owned), loads `vhci_hcd`, and starts the service on `/run/usbip-attach/control.sock` (mode 0600, owned by that account, with a Unix-credentials check). The agent only runs `/usr/bin/usbip` as `port`, `attach -r ADDRESS -b BUSID` or `detach -p PORT`, with validated arguments, and nothing else. Moonlight's service picks it up automatically, so nothing needs configuring. `sudo python3 usbip-attach.py uninstall` removes it. Because that account can then attach USB devices from any reachable USB/IP server on that PC, install it only for accounts you would trust with that.
 
 Without the agent, give that account a one-time passwordless rule limited to the three commands the service runs (replace `USER`), or set the PC's SSH user to `root`:
 
@@ -83,11 +83,15 @@ Open **Settings → Input Settings → USB devices to capture** and tick the dev
 
 #### How it behaves
 
-- Capture first probes the streaming PC over SSH (OS, existing imports), and only then binds the device locally, so an unreachable PC leaves the device local. It then attaches remotely and verifies the imported port. Release detaches that exact port, then unbinds locally. The OS and SSH account used are saved per device under `/var/lib/usbip-bind`, so release uses the same ones even if you change the SSH user meanwhile.
-- Requests run one at a time. Repeated captures do not toggle the device back off, and a repeated release is harmless.
-- The service never uses `detach --all`, retries, monitors connections or recovers from crashes. Windows attach uses `--once`. A failed capture can leave a device exported until the next release; a timed-out SSH command may still complete remotely. A failed remote detach still unbinds locally and keeps the saved state so you can inspect it or release again.
-- Moonlight waits up to 20 seconds when quitting so the final release is delivered.
-- When switching hosts, an SSH exit code of 255 from the previous host triggers a forced local release and a fresh capture on the new host. This code also covers authentication errors, so it does not prove the previous host is offline.
+- Capture first probes the streaming PC over SSH (OS if not yet known, existing imports), and only then binds the device locally, so an unreachable PC leaves the device local. If the device is still exported from an earlier attempt, it is unbound first. Attach and port verification then run in a single SSH call. The OS and SSH account used are saved per device under `/var/lib/usbip-bind`, so release uses the same ones even if you change the SSH user meanwhile.
+- A capture that fails after binding is rolled back: anything attached remotely is detached and the device is unbound locally.
+- Release unbinds locally first, so the device is back immediately, then detaches the remote port as a best effort. A Linux streaming PC clears the import on its own; on Windows it looks like the device was unplugged. A failed remote detach is only logged, and any leftover import of this machine's device is detached at the next capture on that PC. Windows attach uses `--once`, so it never tries to reconnect.
+- If the saved device was unplugged or moved to another USB port, release leaves that bus ID alone and just clears the saved state.
+- Capturing for a different streaming PC (or a different SSH user) releases the device from the previous one first. If the previous PC cannot be reached, it is released locally only. The newest request always wins.
+- Requests run one at a time. Repeated captures do not toggle the device back off, and a repeated release is harmless. A capture and release queued for the same device that have not started yet cancel each other out.
+- SSH connects with a 3 second timeout, and each command is limited to 6 seconds; a hung command also closes a stale shared SSH connection (`ControlMaster`). Sharing SSH connections in `~/.ssh/config` (`ControlMaster auto`, `ControlPersist`) makes each step noticeably faster.
+- Ownership is kept in memory. When the service starts, any device left bound from a previous run is unbound locally; a leftover remote import is cleaned at the next capture on that PC. Moonlight waits up to 3 seconds when quitting for a request in progress; closing its connection releases the rest.
+- The service never uses `detach --all`, and only detaches ports whose remote bus ID matches this machine and device.
 
 Windows `usbip.exe` commands the service runs (shown for manual testing; replace the placeholders with real values, never assume a port number and never use `detach --all`):
 
@@ -117,7 +121,7 @@ through the running service (replace the vendor/product IDs):
 python3 /usr/local/lib/usbip-bind.py reset 046d c547
 ```
 
-This ignores remote detach failures but still checks local USB topology and reports
+This skips the streaming PC entirely but still checks local USB topology and reports
 local unbind failures. Only use it when you intend to abandon the saved attachment.
 
 To uninstall, first release any captured devices (the installer refuses otherwise). `/var/lib/usbip-bind` is left in place, and `usbipd.service` and the `usbip` packages are untouched:

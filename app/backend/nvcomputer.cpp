@@ -23,6 +23,7 @@
 #define SER_CUSTOMNAME "customname"
 #define SER_NVIDIASOFTWARE "nvidiasw"
 #define SER_SSHUSER "sshuser"
+#define SER_SSHPLATFORM "sshplatform"
 
 NvComputer::NvComputer(QSettings& settings)
 {
@@ -41,6 +42,7 @@ NvComputer::NvComputer(QSettings& settings)
     this->serverCert = QSslCertificate(settings.value(SER_SRVCERT).toByteArray());
     this->isNvidiaServerSoftware = settings.value(SER_NVIDIASOFTWARE).toBool();
     this->sshUser = settings.value(SER_SSHUSER).toString();
+    this->sshPlatform = settings.value(SER_SSHPLATFORM).toString();
 
     int appCount = settings.beginReadArray(SER_APPLIST);
     this->appList.reserve(appCount);
@@ -95,6 +97,7 @@ void NvComputer::serialize(QSettings& settings, bool serializeApps) const
     settings.setValue(SER_SRVCERT, serverCert.toPem());
     settings.setValue(SER_NVIDIASOFTWARE, isNvidiaServerSoftware);
     settings.setValue(SER_SSHUSER, sshUser);
+    settings.setValue(SER_SSHPLATFORM, sshPlatform);
 
     // Avoid deleting an existing applist if we couldn't get one
     if (!appList.isEmpty() && serializeApps) {
@@ -121,6 +124,7 @@ bool NvComputer::isEqualSerialized(const NvComputer &that) const
            this->serverCert == that.serverCert &&
            this->isNvidiaServerSoftware == that.isNvidiaServerSoftware &&
            this->sshUser == that.sshUser &&
+           this->sshPlatform == that.sshPlatform &&
            this->appList == that.appList;
 }
 

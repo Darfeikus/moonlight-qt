@@ -413,10 +413,13 @@ void SdlInputHandler::setCaptureActive(bool active)
     dispatchUsbipCapture(active);
 }
 
-void SdlInputHandler::setHostAddress(const QString& address, const QString& sshUser)
+void SdlInputHandler::setHostAddress(const QString& address, const QString& sshUser,
+                                     const QString& sshPlatform, const QString& computerUuid)
 {
     m_HostAddress = address;
     m_HostSshUser = sshUser;
+    m_HostSshPlatform = sshPlatform;
+    m_HostUuid = computerUuid;
 }
 
 void SdlInputHandler::dispatchUsbipCapture(bool active)
@@ -435,12 +438,14 @@ void SdlInputHandler::dispatchUsbipCapture(bool active)
     }
 
     // The client queues these on its own worker thread, so this never stalls
-    // the event/render thread, and the app drains it before exiting.
+    // the event/render thread. The service releases anything still captured
+    // when Moonlight exits, however it exits.
     UsbipClient* client = UsbipClient::get();
     for (const QString& device : m_UsbipDevices) {
         QStringList ids = device.split(':');
         if (ids.size() == 2) {
-            client->submit(active ? "capture" : "release", m_HostAddress, m_HostSshUser, ids[0], ids[1]);
+            client->submit(active ? "capture" : "release", m_HostAddress, m_HostSshUser,
+                           m_HostSshPlatform, m_HostUuid, ids[0], ids[1]);
         }
     }
 #endif

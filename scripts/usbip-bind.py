@@ -20,6 +20,7 @@ import socketserver
 import struct
 import subprocess
 import sys
+import threading
 
 
 ADDRESS = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
@@ -27,15 +28,28 @@ ACCOUNT = re.compile(r"[A-Za-z_][A-Za-z0-9_.-]*")
 BUSID = re.compile(r"[0-9]+-[0-9]+(?:\.[0-9]+)*")
 WINDOWS_USBIP = r'"C:\Program Files\USBip\usbip.exe"'
 LINUX_AGENT = "/usr/local/bin/usbip-attach"
+# Picks root, the attach agent or `sudo -n` on a Linux streaming PC within the same
+# SSH command, so only the OS has to be known in advance.
+LINUX_RUNNER = (
+    'if [ "$(id -u)" = 0 ]; then u() { LC_ALL=C /usr/bin/usbip "$@"; }; '
+    'elif [ -x ' + LINUX_AGENT + ' ]; then u() { ' + LINUX_AGENT + ' "$@"; }; '
+    'else u() { LC_ALL=C sudo -n /usr/bin/usbip "$@"; }; fi; '
+)
+MARKER = "--usbip-bind--"
+PLATFORMS = ("windows", "linux")
 USB_ID = re.compile(r"[0-9a-fA-F]{4}")
 SOCKET_PATH = Path("/run/usbip-bind/control.sock")
 STATE_DIRECTORY = Path("/var/lib/usbip-bind")
 SYSFS = Path("/sys/bus/usb/devices")
+STATE_NAME = re.compile(r"([0-9a-f]{4})-([0-9a-f]{4})\.json")
 SSH_FAILURE = 255
+SSH_CONNECT_TIMEOUT = 3
+SSH_TIMEOUT = 6
+LOCAL_TIMEOUT = 20
 ERRORS = (OSError, ValueError, RuntimeError, KeyError, TypeError, subprocess.TimeoutExpired)
 
 
-def run_raw(argv, ssh_account=None):
+def run_raw(argv, ssh_account=None, timeout=LOCAL_TIMEOUT):
     options = {}
     if ssh_account is not None:
         environment = dict(os.environ)
@@ -53,7 +67,7 @@ def run_raw(argv, ssh_account=None):
                 ssh_account.pw_name, ssh_account.pw_gid
             )
     return subprocess.run(
-        argv, capture_output=True, text=True, timeout=20, **options
+        argv, capture_output=True, text=True, timeout=timeout, **options
     )
 
 
@@ -72,55 +86,73 @@ def ssh_target(address, user):
 
 
 def ssh_raw(target, command, ssh_account=None):
-    return run_raw([
-        "/usr/bin/ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes",
-        "-o", "ConnectTimeout=5", "-o", "ServerAliveInterval=5",
-        "-o", "ServerAliveCountMax=1", target, command,
-    ], ssh_account)
+    try:
+        return run_raw([
+            "/usr/bin/ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes",
+            "-o", f"ConnectTimeout={SSH_CONNECT_TIMEOUT}", "-o", "ServerAliveInterval=2",
+            "-o", "ServerAliveCountMax=2", target, command,
+        ], ssh_account, SSH_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        # A shared connection (ControlMaster) to a PC that slept or rebooted can
+        # hang every command; close it so the next attempt connects afresh.
+        try:
+            run_raw(["/usr/bin/ssh", "-O", "exit", target], ssh_account, SSH_CONNECT_TIMEOUT)
+        except ERRORS:
+            pass
+        raise
+
+
+class HostUnreachable(RuntimeError):
+    """SSH itself could not reach or authenticate to the remote host, as opposed
+    to the remote usbip command running and failing for some other reason."""
 
 
 def detect_platform(target, ssh_account=None):
     """Identify the remote OS over SSH; Sunshine does not report it."""
+    # `||` works in POSIX shells, fish and cmd.exe, so one round trip covers both.
+    result = ssh_raw(target, "uname -s || ver", ssh_account)
+    if result.returncode == SSH_FAILURE:
+        raise HostUnreachable(f"SSH to {target} failed: {result.stderr.strip()}")
+    if re.search(r"(?m)^Linux\s*$", result.stdout):
+        return "linux"
+    if "Microsoft Windows" in result.stdout:
+        return "windows"
+    raise RuntimeError(
+        f"{target} is neither Linux nor Windows: {result.stdout.strip()!r}"
+    )
+
+
+def remote_command(platform, commands):
+    """One remote command line that runs each usbip command in order."""
+    separator = f" && echo {MARKER} && "
+    if platform == "windows":
+        return separator.join(WINDOWS_USBIP + " " + " ".join(args) for args in commands)
+    script = LINUX_RUNNER + separator.join("u " + shlex.join(args) for args in commands)
     # Run through sh so a non-POSIX login shell (fish, csh) still works.
-    probe = f'sh -c "uname -s && id -u && {{ test -x {LINUX_AGENT} && echo agent || echo none; }}"'
-    first = ssh_raw(target, probe, ssh_account)
-    if first.returncode == SSH_FAILURE:
-        raise RuntimeError(f"SSH to {target} failed: {first.stderr.strip()}")
-    if first.returncode == 0:
-        fields = first.stdout.split()
-        if len(fields) == 3 and fields[0] == "Linux" and fields[1].isdigit() and fields[2] in ("agent", "none"):
-            return {
-                "platform": "linux", "sudo": fields[1] != "0",
-                "agent": fields[1] != "0" and fields[2] == "agent",
-            }
-        raise ValueError(f"unrecognized platform response from {target}: {first.stdout!r}")
-    second = ssh_raw(target, WINDOWS_USBIP + " port", ssh_account)
-    if second.returncode == SSH_FAILURE:
-        raise RuntimeError(f"SSH to {target} failed: {second.stderr.strip()}")
-    if second.returncode == 0:
-        return {"platform": "windows", "sudo": False, "agent": False}
-    raise RuntimeError(f"{target} is neither Linux nor Windows with USBip installed")
+    return "sh -c " + shlex.quote(script)
 
 
-def remote_usbip(target, info, args, ssh_account=None):
-    if info["platform"] == "windows":
-        command = WINDOWS_USBIP + " " + " ".join(args)
-    elif info.get("agent"):
-        # The root attach agent on the streaming PC needs no sudo rule.
-        command = LINUX_AGENT + " " + shlex.join(args)
-    else:
-        prefix = "sudo -n " if info["sudo"] else ""
-        command = "LC_ALL=C " + prefix + "/usr/bin/usbip " + shlex.join(args)
-    result = ssh_raw(target, command, ssh_account)
+def remote_usbip(target, platform, commands, ssh_account=None):
+    """Run usbip commands on the streaming PC in one SSH session; return each output."""
+    result = ssh_raw(target, remote_command(platform, commands), ssh_account)
     if result.returncode:
         message = (
-            f"usbip {args[0]} on {target} failed ({result.returncode}): "
-            f"{result.stderr.strip()} {result.stdout.strip()}"
+            f"usbip {' + '.join(args[0] for args in commands)} on {target} failed "
+            f"({result.returncode}): {result.stderr.strip()} {result.stdout.strip()}"
         )
         if result.returncode == SSH_FAILURE:
             raise HostUnreachable(message)
         raise RuntimeError(message)
-    return result.stdout
+    outputs = re.split(
+        r"(?m)^" + re.escape(MARKER) + r"[ \t\r]*(?:\n|$)", result.stdout
+    )
+    if len(outputs) != len(commands):
+        raise ValueError(f"unexpected usbip output from {target}: {result.stdout!r}")
+    return outputs
+
+
+def remote_one(target, platform, args, ssh_account=None):
+    return remote_usbip(target, platform, [args], ssh_account)[0]
 
 
 def local_address(address):
@@ -172,7 +204,11 @@ def device(action, vendor, product):
         raise RuntimeError(
             f"expected one {vendor}:{product} device, found {len(matches)}"
         )
-    busid = matches[0]
+    return set_export(matches[0], action)
+
+
+def set_export(busid, action):
+    """Report, bind (export) or unbind one bus ID and confirm the driver changed."""
     driver = SYSFS / busid / "driver"
     if not driver.exists():
         raise RuntimeError("selected device has no bound USB driver")
@@ -185,6 +221,13 @@ def device(action, vendor, product):
         if exported != (action == "bind"):
             raise RuntimeError(f"unexpected driver after {action}")
     return {"busid": busid, "exported": exported}
+
+
+def same_device(busid, vendor, product):
+    """Whether the device saved at busid is still plugged in there."""
+    return (
+        sysfs_text(busid, "idVendor").lower(), sysfs_text(busid, "idProduct").lower()
+    ) == (vendor, product)
 
 
 def usbip_names(output):
@@ -241,9 +284,7 @@ def read_state(path):
         not ADDRESS.fullmatch(state["host"])
         or not ADDRESS.fullmatch(state["server"])
         or not BUSID.fullmatch(state["busid"])
-        or state["platform"] not in ("windows", "linux")
-        or type(state["sudo"]) is not bool
-        or type(state.get("agent", False)) is not bool
+        or state["platform"] not in PLATFORMS
         or (state["ssh_user"] is not None and (
             not isinstance(state["ssh_user"], str)
             or not ACCOUNT.fullmatch(state["ssh_user"])
@@ -256,124 +297,157 @@ def read_state(path):
     return state
 
 
-class HostUnreachable(RuntimeError):
-    """SSH itself could not reach or authenticate to the remote host, as opposed
-    to the remote usbip command running and failing for some other reason."""
+def attached(state, vendor, product, ssh_account):
+    """Whether the saved attachment is still exported here and imported there."""
+    busid = state["busid"]
+    if (
+        state["port"] is None or not same_device(busid, vendor, product)
+        or not set_export(busid, "status")["exported"]
+    ):
+        return False
+    target = ssh_target(state["host"], state["ssh_user"])
+    ports = imported_ports(remote_one(target, state["platform"], ["port"], ssh_account))
+    return ports.get(state["port"]) == (state["server"], 3240, busid)
 
 
-def capture(address, user, path, vendor, product, ssh_account):
+def capture(address, user, path, vendor, product, ssh_account, platform=None):
+    """Attach the device to address and return the streaming PC's OS.
+
+    platform is the OS Moonlight saved for that PC, or None to detect it."""
     state = read_state(path)
-    local = device("status", vendor, product)
     if state:
-        if state["host"] != address:
-            old_target = ssh_target(state["host"], state["ssh_user"])
+        reachable = True
+        if (state["host"], state["ssh_user"]) == (address, user):
             try:
-                remote_usbip(old_target, state, ["port"], ssh_account)
-            except HostUnreachable:
-                # The old host is provably gone (connection refused/timed out/no
-                # route), not just slow or flaky, so it cannot still be holding
-                # the device. Safe to clear the stale record and retry fresh.
-                logging.warning(
-                    "previous host %s is unreachable; force-releasing the stale "
-                    "attachment before capturing on %s", state["host"], address,
-                )
-                release(path, vendor, product, ssh_account, force=True)
-                return capture(address, user, path, vendor, product, ssh_account)
-            except ERRORS:
-                pass
-            raise RuntimeError("release the previous host before capturing another")
-        target = ssh_target(state["host"], state["ssh_user"])
-        ports = imported_ports(remote_usbip(target, state, ["port"], ssh_account))
-        expected = (state["server"], 3240, local["busid"])
-        if (
-            state["busid"] == local["busid"]
-            and state["port"] is not None
-            and ports.get(state["port"]) == expected
-            and local["exported"]
-        ):
-            logging.info("device already attached to %s port %s", address, state["port"])
-            return
-        raise RuntimeError("unfinished or stale handoff; run release before capturing")
+                if attached(state, vendor, product, ssh_account):
+                    logging.info("device already attached to %s port %s", address, state["port"])
+                    return state["platform"]
+            except (HostUnreachable, subprocess.TimeoutExpired):
+                reachable = False
+            except ERRORS as error:
+                logging.warning("could not verify the existing attachment: %s", error)
+        # A different PC or account always wins, and a stale or broken handoff is
+        # cleared the same way, so capture never needs a manual release first.
+        logging.info("replacing the previous attachment to %s", state["host"])
+        release(path, vendor, product, ssh_account, force=not reachable)
 
+    local = device("status", vendor, product)
+    busid = local["busid"]
     target = ssh_target(address, user)
-    # Every remote probe happens before binding, so a failure leaves the device local.
-    info = detect_platform(target, ssh_account)
+    known = platform is not None
+    if not known:
+        platform = detect_platform(target, ssh_account)
     server = local_address(address)
-    ports = imported_ports(remote_usbip(target, info, ["port"], ssh_account))
-    expected = (server, 3240, local["busid"])
-    if expected in ports.values() or local["exported"]:
-        raise RuntimeError("device is already exported or attached outside this handoff")
+    # Every remote probe happens before binding, so a failure leaves the device local.
+    try:
+        ports = imported_ports(remote_one(target, platform, ["port"], ssh_account))
+    except (HostUnreachable, subprocess.TimeoutExpired):
+        raise
+    except ERRORS:
+        if not known:
+            raise
+        # The OS Moonlight saved for this PC may be out of date (a reinstall, say).
+        detected = detect_platform(target, ssh_account)
+        if detected == platform:
+            raise
+        logging.info("%s runs %s, not %s", address, detected, platform)
+        platform = detected
+        ports = imported_ports(remote_one(target, platform, ["port"], ssh_account))
+    expected = (server, 3240, busid)
+    leftovers = [port for port, location in ports.items() if location == expected]
     state = {
-        "host": address, "server": server, "busid": local["busid"], "port": None,
-        "platform": info["platform"], "sudo": info["sudo"],
-        "agent": info.get("agent", False), "ssh_user": user,
+        "host": address, "server": server, "busid": busid, "port": None,
+        "platform": platform, "ssh_user": user,
     }
     save_state(path, state)
-    exported = device("bind", vendor, product)
-    if exported["busid"] != state["busid"] or not exported["exported"]:
-        raise RuntimeError("device did not bind as expected")
-    args = ["attach", "-r", server, "-b", state["busid"]]
-    if info["platform"] == "windows":
-        args += ["--once", "--terse"]
-    output = remote_usbip(target, info, args, ssh_account)
-    if info["platform"] == "windows":
-        if not re.fullmatch(r"\s*[0-9]+\s*", output):
-            raise ValueError(f"unexpected attach port response: {output!r}")
-        port = int(output)
-        if not 1 <= port <= 255:
-            raise ValueError(f"invalid Windows attachment port: {port}")
-        state["port"] = port
+    try:
+        for port in leftovers:
+            # A dead import of this same device from an earlier handoff.
+            remote_one(target, platform, ["detach", "-p", str(port)], ssh_account)
+        if local["exported"]:
+            # Export afresh so no earlier USB/IP connection survives.
+            set_export(busid, "unbind")
+        if not set_export(busid, "bind")["exported"]:
+            raise RuntimeError("device did not bind as expected")
+        args = ["attach", "-r", server, "-b", busid]
+        if platform == "windows":
+            args += ["--once", "--terse"]
+        attach_output, port_output = remote_usbip(
+            target, platform, [args, ["port"]], ssh_account
+        )
+        if platform == "windows":
+            if not re.fullmatch(r"\s*[0-9]+\s*", attach_output):
+                raise ValueError(f"unexpected attach port response: {attach_output!r}")
+            state["port"] = int(attach_output)
+            if not 1 <= state["port"] <= 255:
+                raise ValueError(f"invalid Windows attachment port: {state['port']}")
+        matches = [
+            port for port, location in imported_ports(port_output).items()
+            if location == expected
+        ]
+        if len(matches) != 1 or (
+            state["port"] is not None and state["port"] != matches[0]
+        ):
+            raise RuntimeError("could not verify the device's imported port")
+        state["port"] = matches[0]
         save_state(path, state)
-    ports = imported_ports(remote_usbip(target, info, ["port"], ssh_account))
-    matches = [port for port, location in ports.items() if location == expected]
-    if len(matches) != 1 or (
-        state["port"] is not None and state["port"] != matches[0]
-    ):
-        raise RuntimeError("could not verify the device's imported port")
-    state["port"] = matches[0]
-    save_state(path, state)
+    except ERRORS:
+        # Never leave the device exported without a verified attachment.
+        try:
+            release(path, vendor, product, ssh_account)
+        except ERRORS as error:
+            logging.error("could not undo the failed capture: %s", error)
+        raise
     logging.info("attached device to %s port %s", address, state["port"])
+    return platform
+
+
+def detach_remote(state, ssh_account):
+    target = ssh_target(state["host"], state["ssh_user"])
+    ports = imported_ports(remote_one(target, state["platform"], ["port"], ssh_account))
+    expected = (state["server"], 3240, state["busid"])
+    port = state["port"]
+    if port is None:
+        matches = [p for p, location in ports.items() if location == expected]
+        if len(matches) > 1:
+            raise RuntimeError("ambiguous imported device; refusing detach")
+        port = matches[0] if matches else None
+    if port is not None and port in ports:
+        if ports[port] != expected:
+            raise RuntimeError("saved port belongs to another device; refusing detach")
+        remote_one(target, state["platform"], ["detach", "-p", str(port)], ssh_account)
 
 
 def release(path, vendor, product, ssh_account, force=False):
+    """Return the device here first, so it is usable again at once, then tidy up
+    the streaming PC. force skips the streaming PC entirely."""
     state = read_state(path)
-    errors = []
-    if state:
-        try:
-            target = ssh_target(state["host"], state["ssh_user"])
-            ports = imported_ports(remote_usbip(target, state, ["port"], ssh_account))
-            expected = (state["server"], 3240, state["busid"])
-            port = state["port"]
-            if port is None:
-                matches = [p for p, location in ports.items() if location == expected]
-                if len(matches) > 1:
-                    raise RuntimeError("ambiguous imported device; refusing detach")
-                port = matches[0] if matches else None
-            if port is not None and port in ports:
-                if ports[port] != expected:
-                    raise RuntimeError("saved port belongs to another device; refusing detach")
-                remote_usbip(target, state, ["detach", "-p", str(port)], ssh_account)
-        except ERRORS as error:
-            if force:
-                # The caller has confirmed the old host is gone for good; drop the
-                # remote detach failure so a dead host can't permanently wedge the
-                # local state. Local safety checks below still apply.
-                logging.warning("force release: ignoring remote detach failure: %s", error)
-            else:
-                errors.append(f"remote detach: {error}")
-    try:
-        local = device("status", vendor, product)
-        if state and local["busid"] != state["busid"]:
-            raise RuntimeError("device topology changed; inspect the previous export")
-        local = device("unbind", vendor, product)
-        if local["exported"]:
+    if not state:
+        # Nothing recorded; Moonlight is the only USB/IP user, so just make sure it is local.
+        if device("unbind", vendor, product)["exported"]:
             raise RuntimeError("device remains exported after unbind")
-    except ERRORS as error:
-        errors.append(f"local unbind: {error}")
-    if errors:
-        raise RuntimeError("; ".join(errors))
+        logging.info("device returned locally")
+        return
+    busid = state["busid"]
+    if same_device(busid, vendor, product):
+        if set_export(busid, "unbind")["exported"]:
+            raise RuntimeError("device remains exported after unbind")
+        logging.info("device returned locally")
+    else:
+        # Unplugged or moved: its export went with it, and whatever is at that
+        # bus ID now is another device that must not be touched.
+        logging.warning(
+            "%s:%s is no longer at %s; forgetting its attachment", vendor, product, busid
+        )
     path.unlink(missing_ok=True)
-    logging.info("device returned locally")
+    if force:
+        return
+    try:
+        detach_remote(state, ssh_account)
+    except ERRORS as error:
+        # Unbinding already ended the USB/IP connection, so the streaming PC
+        # drops the device by itself; this only tidies up its port list.
+        logging.warning("could not detach on %s: %s", state["host"], error)
 
 
 class Controller:
@@ -382,8 +456,19 @@ class Controller:
             raise ValueError("invalid local user")
         self.account = pwd.getpwnam(user)
         self.state_directory = state_directory
+        # Requests from every connection run one at a time.
+        self.lock = threading.Lock()
+        # (vendor, product) -> the connection whose capture it follows
+        self.owners = {}
 
-    def execute(self, request):
+    def state_path(self, vendor, product):
+        return self.state_directory / f"{vendor}-{product}.json"
+
+    def execute(self, request, owner=None):
+        with self.lock:
+            return self._execute(request, owner)
+
+    def _execute(self, request, owner):
         if not isinstance(request, dict) or "action" not in request:
             raise ValueError("expected an action")
         action = request["action"]
@@ -392,8 +477,10 @@ class Controller:
                 raise ValueError("list takes no parameters")
             return {"devices": list_devices()}
         required = {"action", "host", "vendor", "product"}
-        if not required <= set(request) <= required | {"user", "force"}:
-            raise ValueError("expected action, host, vendor, product and optionally user, force")
+        if not required <= set(request) <= required | {"user", "force", "platform"}:
+            raise ValueError(
+                "expected action, host, vendor, product and optionally user, force, platform"
+            )
         if action not in ("capture", "release", "status"):
             raise ValueError("unknown device command")
         force = request.get("force", False)
@@ -401,6 +488,12 @@ class Controller:
             raise ValueError("force must be a boolean")
         if force and action != "release":
             raise ValueError("force is only valid for release")
+        # Empty or missing means unknown, so the service detects it.
+        platform = request.get("platform") or None
+        if "platform" in request and action != "capture":
+            raise ValueError("platform is only valid for capture")
+        if platform is not None and platform not in PLATFORMS:
+            raise ValueError("platform must be windows or linux")
         vendor, product = request["vendor"], request["product"]
         if (
             not isinstance(vendor, str) or not isinstance(product, str)
@@ -417,43 +510,105 @@ class Controller:
             not isinstance(ssh_user, str) or not ACCOUNT.fullmatch(ssh_user)
         ):
             raise ValueError("invalid SSH user")
-        path = self.state_directory / f"{vendor}-{product}.json"
+        path = self.state_path(vendor, product)
         if action == "status":
             return {
                 **device("status", vendor, product),
                 "attachment": read_state(path),
             }
         logging.info("%s %s:%s on %s%s", action, vendor, product, address, " (forced)" if force else "")
+        key = (vendor, product)
         if action == "capture":
-            capture(address, ssh_user, path, vendor, product, self.account)
-        else:
-            release(path, vendor, product, self.account, force=force)
+            # A failed capture leaves the device local, so it follows no one.
+            self.owners.pop(key, None)
+            platform = capture(address, ssh_user, path, vendor, product, self.account, platform)
+            self.owners[key] = owner
+            return {"action": action, "vendor": vendor, "product": product, "platform": platform}
+        release(path, vendor, product, self.account, force=force)
+        self.owners.pop(key, None)
         return {"action": action, "vendor": vendor, "product": product}
+
+    def disconnected(self, owner):
+        """Release whatever this connection captured: Moonlight quit, crashed or was killed."""
+        with self.lock:
+            for key in [key for key, found in self.owners.items() if found is owner]:
+                del self.owners[key]
+                vendor, product = key
+                logging.info("Moonlight disconnected; releasing %s:%s", vendor, product)
+                try:
+                    release(self.state_path(vendor, product), vendor, product, self.account)
+                except ERRORS as error:
+                    logging.error("could not release %s:%s: %s", vendor, product, error)
+
+    def recover(self):
+        """Return devices a previous run left exported; no Moonlight holds them now.
+
+        Unbinding ends their USB/IP connections, so the streaming PCs are not
+        contacted; a later capture clears any import left there."""
+        with self.lock:
+            for path in sorted(self.state_directory.glob("*.json")):
+                name = STATE_NAME.fullmatch(path.name)
+                if not name:
+                    continue
+                logging.info("returning %s:%s left over from a previous run", name[1], name[2])
+                try:
+                    release(path, name[1], name[2], self.account, force=True)
+                except ERRORS as error:
+                    logging.error("could not return %s:%s: %s", name[1], name[2], error)
 
 
 class CommandHandler(socketserver.StreamRequestHandler):
+    """One client connection carrying newline-delimited JSON requests.
+
+    Moonlight keeps its connection open; devices it captured are released as
+    soon as it closes, however Moonlight ends."""
+
     def handle(self):
-        self.connection.settimeout(10)
+        controller = self.server.controller
         try:
-            credentials = self.connection.getsockopt(
-                socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")
-            )
-            _, uid, _ = struct.unpack("3i", credentials)
-            if uid not in (0, self.server.controller.account.pw_uid):
-                raise PermissionError("this account is not authorized to control USB devices")
-            line = self.rfile.readline(4097)
-            if len(line) > 4096 or not line.endswith(b"\n"):
-                raise ValueError("invalid or oversized command")
-            result = self.server.controller.execute(json.loads(line))
-            response = {"ok": True, "result": result}
-        except ERRORS as error:
-            logging.error("USB/IP command failed: %s", error)
-            response = {"ok": False, "error": str(error)}
+            try:
+                credentials = self.connection.getsockopt(
+                    socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")
+                )
+                _, uid, _ = struct.unpack("3i", credentials)
+                if uid not in (0, controller.account.pw_uid):
+                    raise PermissionError("this account is not authorized to control USB devices")
+            except ERRORS as error:
+                logging.error("USB/IP command failed: %s", error)
+                self.reply({"ok": False, "error": str(error)})
+                return
+            while True:
+                try:
+                    line = self.rfile.readline(4097)
+                except OSError:
+                    return
+                if not line:
+                    return
+                try:
+                    if len(line) > 4096 or not line.endswith(b"\n"):
+                        raise ValueError("invalid or oversized command")
+                    result = controller.execute(json.loads(line), owner=self)
+                    response = {"ok": True, "result": result}
+                except ERRORS as error:
+                    logging.error("USB/IP command failed: %s", error)
+                    response = {"ok": False, "error": str(error)}
+                # A client that is gone, or a line we cannot resynchronize after, ends it.
+                if not self.reply(response) or not line.endswith(b"\n"):
+                    return
+        finally:
+            controller.disconnected(self)
+
+    def reply(self, response):
         try:
             self.wfile.write(json.dumps(response).encode() + b"\n")
+            return True
         except OSError:
-            # The client may already be gone, for example Moonlight quitting.
-            pass
+            return False
+
+
+class Server(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
+    # Moonlight holds its connection for as long as it runs.
+    daemon_threads = True
 
 
 def serve(user, socket_path, state_directory):
@@ -472,7 +627,8 @@ def serve(user, socket_path, state_directory):
     if socket_path.parent.is_symlink() or socket_path.parent.stat().st_uid != 0:
         raise PermissionError("socket directory must be root-owned and not a symlink")
     socket_path.parent.chmod(0o755)
-    with socketserver.UnixStreamServer(str(socket_path), CommandHandler) as server:
+    controller.recover()
+    with Server(str(socket_path), CommandHandler) as server:
         server.controller = controller
         os.chown(socket_path, controller.account.pw_uid, controller.account.pw_gid)
         socket_path.chmod(0o600)

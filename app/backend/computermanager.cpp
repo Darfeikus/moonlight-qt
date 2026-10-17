@@ -3,6 +3,10 @@
 #include "nvhttp.h"
 #include "nvpairingmanager.h"
 
+#ifdef Q_OS_LINUX
+#include "streaming/usbip/usbipclient.h"
+#endif
+
 #include <Limelight.h>
 #include <QtEndian>
 
@@ -192,6 +196,12 @@ ComputerManager::ComputerManager(StreamingPreferences* prefs)
     // Start the delayed flush thread to handle saveHosts() calls
     m_DelayedFlushThread = new DelayedFlushThread(this);
     m_DelayedFlushThread->start();
+
+#ifdef Q_OS_LINUX
+    // Delivered on this thread, since the client emits from its worker thread
+    connect(UsbipClient::get(), &UsbipClient::platformDetected,
+            this, &ComputerManager::setSshPlatform);
+#endif
 
     // To quit in a timely manner, we must block additional requests
     // after we receive the aboutToQuit() signal. This is necessary
@@ -575,6 +585,32 @@ bool ComputerManager::setSshUser(NvComputer* computer, QString user)
 
     handleComputerStateChanged(computer);
     return true;
+}
+
+void ComputerManager::setSshPlatform(const QString& uuid, const QString& platform)
+{
+    if (platform != "windows" && platform != "linux") {
+        return;
+    }
+
+    NvComputer* computer;
+    {
+        QReadLocker lock(&m_Lock);
+        computer = m_KnownHosts.value(uuid);
+    }
+    if (computer == nullptr) {
+        return;
+    }
+
+    {
+        QWriteLocker lock(&computer->lock);
+        if (computer->sshPlatform == platform) {
+            return;
+        }
+        computer->sshPlatform = platform;
+    }
+
+    handleComputerStateChanged(computer);
 }
 
 void ComputerManager::clientSideAttributeUpdated(NvComputer* computer)

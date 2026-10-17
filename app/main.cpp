@@ -1058,8 +1058,9 @@ int main(int argc, char *argv[])
     QThreadPool::globalInstance()->waitForDone(30000);
 
 #ifdef Q_OS_LINUX
-    // Make sure the last USB/IP release reaches the service before we exit
-    UsbipClient::shutdown(20000);
+    // Exiting closes our connection to the USB/IP service, which releases
+    // anything still captured; just give a request in progress a moment.
+    UsbipClient::shutdown(3000);
 #endif
     // Restore the default logger for all libraries before shutting down ours
 #if SDL_VERSION_ATLEAST(3, 0, 0)

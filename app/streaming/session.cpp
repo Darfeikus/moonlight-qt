@@ -1634,7 +1634,8 @@ bool Session::startConnectionAsync()
     // so USB/IP requests can target the current host.
     {
         QReadLocker lock(&m_Computer->lock);
-        m_InputHandler->setHostAddress(QString::fromUtf8(hostnameStr), m_Computer->sshUser);
+        m_InputHandler->setHostAddress(QString::fromUtf8(hostnameStr), m_Computer->sshUser,
+                                       m_Computer->sshPlatform, m_Computer->uuid);
     }
 
     SERVER_INFORMATION hostInfo;
