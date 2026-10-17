@@ -106,6 +106,11 @@ for different architectures, which handle building deps and extra linking for yo
         * This build will lack windowed mode, Discord/Help links, and other features that don't make sense on an embedded device.
         * For platforms with poor GPU performance, add `"CONFIG+=gpuslow"` to prefer direct KMSDRM rendering over GL/Vulkan renderers. Direct KMSDRM rendering can use dedicated YUV/RGB conversion and scaling hardware rather than slower GPU shaders for these operations.
 
+## Fork shortcut
+
+On desktop environments, press **Right Alt** to release captured mouse and keyboard
+input instead of **Ctrl+Alt+Shift+Z**. Left Alt continues to pass through to the host.
+
 ## Contribute
 1. Fork us
 2. Write code
