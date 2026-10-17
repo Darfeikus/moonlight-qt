@@ -202,6 +202,7 @@ SOURCES += \
     path.cpp \
     settings/mappingmanager.cpp \
     gui/sdlgamepadkeynavigation.cpp \
+    gui/usbipdevices.cpp \
     streaming/video/overlaymanager.cpp \
     backend/systemproperties.cpp \
     wm.cpp
@@ -240,9 +241,15 @@ HEADERS += \
     path.h \
     settings/mappingmanager.h \
     gui/sdlgamepadkeynavigation.h \
+    gui/usbipdevices.h \
     streaming/video/overlaymanager.h \
     backend/systemproperties.h
 
+# USB/IP device forwarding talks to a local Linux service
+linux {
+    SOURCES += streaming/usbip/usbipclient.cpp
+    HEADERS += streaming/usbip/usbipclient.h
+}
 # Platform-specific renderers and decoders
 ffmpeg {
     message(FFmpeg decoder selected)

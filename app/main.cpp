@@ -54,7 +54,11 @@
 #include "streaming/session.h"
 #include "settings/streamingpreferences.h"
 #include "gui/sdlgamepadkeynavigation.h"
+#include "gui/usbipdevices.h"
 
+#ifdef Q_OS_LINUX
+#include "streaming/usbip/usbipclient.h"
+#endif
 #if defined(Q_OS_WIN32)
 #define IS_UNSPECIFIED_HANDLE(x) ((x) == INVALID_HANDLE_VALUE || (x) == NULL)
 
@@ -954,6 +958,11 @@ int main(int argc, char *argv[])
                                                       [](QQmlEngine* qmlEngine, QJSEngine*) -> QObject* {
                                                           return new SdlGamepadKeyNavigation(StreamingPreferences::get(qmlEngine));
                                                       });
+    qmlRegisterSingletonType<UsbipDevices>("UsbipDevices", 1, 0,
+                                           "UsbipDevices",
+                                           [](QQmlEngine* qmlEngine, QJSEngine*) -> QObject* {
+                                               return new UsbipDevices(StreamingPreferences::get(qmlEngine));
+                                           });
     qmlRegisterSingletonType<StreamingPreferences>("StreamingPreferences", 1, 0,
                                                    "StreamingPreferences",
                                                    [](QQmlEngine* qmlEngine, QJSEngine*) -> QObject* {
@@ -1048,6 +1057,11 @@ int main(int argc, char *argv[])
     // sometimes freezing and blocking process exit.
     QThreadPool::globalInstance()->waitForDone(30000);
 
+#ifdef Q_OS_LINUX
+    // Exiting closes our connection to the USB/IP service, which releases
+    // anything still captured; just give a request in progress a moment.
+    UsbipClient::shutdown(3000);
+#endif
     // Restore the default logger for all libraries before shutting down ours
 #if SDL_VERSION_ATLEAST(3, 0, 0)
     SDL_SetLogOutputFunction(SDL_GetDefaultLogOutputFunction(), nullptr);

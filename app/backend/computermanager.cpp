@@ -3,6 +3,10 @@
 #include "nvhttp.h"
 #include "nvpairingmanager.h"
 
+#ifdef Q_OS_LINUX
+#include "streaming/usbip/usbipclient.h"
+#endif
+
 #include <Limelight.h>
 #include <QtEndian>
 
@@ -10,6 +14,7 @@
 #include <QThreadPool>
 #include <QCoreApplication>
 #include <QRandomGenerator>
+#include <QRegularExpression>
 
 #define SER_HOSTS "hosts"
 #define SER_HOSTS_BACKUP "hostsbackup"
@@ -191,6 +196,12 @@ ComputerManager::ComputerManager(StreamingPreferences* prefs)
     // Start the delayed flush thread to handle saveHosts() calls
     m_DelayedFlushThread = new DelayedFlushThread(this);
     m_DelayedFlushThread->start();
+
+#ifdef Q_OS_LINUX
+    // Delivered on this thread, since the client emits from its worker thread
+    connect(UsbipClient::get(), &UsbipClient::platformDetected,
+            this, &ComputerManager::setSshPlatform);
+#endif
 
     // To quit in a timely manner, we must block additional requests
     // after we receive the aboutToQuit() signal. This is necessary
@@ -554,6 +565,51 @@ void ComputerManager::renameHost(NvComputer* computer, QString name)
     }
 
     // Notify the UI of the state change
+    handleComputerStateChanged(computer);
+}
+
+bool ComputerManager::setSshUser(NvComputer* computer, QString user)
+{
+    user = user.trimmed();
+
+    static const QRegularExpression validUser("^[A-Za-z_][A-Za-z0-9_.-]*$");
+    if (!user.isEmpty() && !validUser.match(user).hasMatch()) {
+        return false;
+    }
+
+    {
+        QWriteLocker lock(&computer->lock);
+
+        computer->sshUser = user;
+    }
+
+    handleComputerStateChanged(computer);
+    return true;
+}
+
+void ComputerManager::setSshPlatform(const QString& uuid, const QString& platform)
+{
+    if (platform != "windows" && platform != "linux") {
+        return;
+    }
+
+    NvComputer* computer;
+    {
+        QReadLocker lock(&m_Lock);
+        computer = m_KnownHosts.value(uuid);
+    }
+    if (computer == nullptr) {
+        return;
+    }
+
+    {
+        QWriteLocker lock(&computer->lock);
+        if (computer->sshPlatform == platform) {
+            return;
+        }
+        computer->sshPlatform = platform;
+    }
+
     handleComputerStateChanged(computer);
 }
 

@@ -179,6 +179,21 @@ void ComputerModel::renameComputer(int computerIndex, QString name)
     m_ComputerManager->renameHost(m_Computers[computerIndex], name);
 }
 
+QString ComputerModel::sshUserForComputer(int computerIndex)
+{
+    Q_ASSERT(computerIndex < m_Computers.count());
+
+    QReadLocker lock(&m_Computers[computerIndex]->lock);
+    return m_Computers[computerIndex]->sshUser;
+}
+
+bool ComputerModel::setSshUserForComputer(int computerIndex, QString user)
+{
+    Q_ASSERT(computerIndex < m_Computers.count());
+
+    return m_ComputerManager->setSshUser(m_Computers[computerIndex], user);
+}
+
 QString ComputerModel::generatePinString()
 {
     return m_ComputerManager->generatePinString();

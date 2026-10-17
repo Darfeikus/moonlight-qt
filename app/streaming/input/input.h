@@ -146,6 +146,9 @@ public:
 
     void setCaptureActive(bool active);
 
+    void setHostAddress(const QString& address, const QString& sshUser,
+                        const QString& sshPlatform, const QString& computerUuid);
+
     bool isMouseInVideoRegion(int mouseX, int mouseY, int windowWidth = -1, int windowHeight = -1);
 
     void updateKeyboardGrabState();
@@ -188,6 +191,8 @@ private:
 
     void performSpecialKeyCombo(KeyCombo combo);
 
+    void dispatchUsbipCapture(bool active);
+
     static
     Uint32 longPressTimerCallback(Uint32 interval, void* param);
 
@@ -226,6 +231,13 @@ private:
     QStringList m_IgnoreDeviceGuids;
     StreamingPreferences::CaptureSysKeysMode m_CaptureSystemKeysMode;
     int m_MouseCursorCapturedVisibilityState;
+
+    QStringList m_UsbipDevices;
+    QString m_HostAddress;
+    QString m_HostSshUser;
+    QString m_HostSshPlatform;
+    QString m_HostUuid;
+    bool m_HardwareCaptureForwarded;
 
     struct {
         KeyCombo keyCombo;

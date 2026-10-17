@@ -1630,6 +1630,14 @@ bool Session::startConnectionAsync()
     QByteArray hostnameStr = m_Computer->activeAddress.address().toUtf8();
     QByteArray siAppVersion = m_Computer->appVersion.toUtf8();
 
+    // Provide the input handler with the address we're actually connecting to
+    // so USB/IP requests can target the current host.
+    {
+        QReadLocker lock(&m_Computer->lock);
+        m_InputHandler->setHostAddress(QString::fromUtf8(hostnameStr), m_Computer->sshUser,
+                                       m_Computer->sshPlatform, m_Computer->uuid);
+    }
+
     SERVER_INFORMATION hostInfo;
     hostInfo.address = hostnameStr.data();
     hostInfo.serverInfoAppVersion = siAppVersion.data();
