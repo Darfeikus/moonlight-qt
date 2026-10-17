@@ -5,6 +5,9 @@ Moonlight talks to this service directly over a local Unix socket. The service
 binds/unbinds the requested USB device on this machine and runs `usbip
 attach/detach` on the streaming PC over SSH. It accepts only capture, release,
 status and list requests.
+
+Install it, from the account that runs Moonlight, with:
+    sudo python3 usbip-bind.py install
 """
 
 import argparse
@@ -21,6 +24,7 @@ import struct
 import subprocess
 import sys
 import threading
+import time
 
 
 ADDRESS = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
@@ -36,6 +40,9 @@ LINUX_RUNNER = (
     'else u() { LC_ALL=C sudo -n /usr/bin/usbip "$@"; }; fi; '
 )
 MARKER = "--usbip-bind--"
+# Linux lists an imported device only once it has been enumerated, a moment after
+# attach returns, so the port check right after attach retries for up to about 3s.
+PORT_WAIT_TRIES = 15
 PLATFORMS = ("windows", "linux")
 USB_ID = re.compile(r"[0-9a-fA-F]{4}")
 SOCKET_PATH = Path("/run/usbip-bind/control.sock")
@@ -47,6 +54,33 @@ SSH_CONNECT_TIMEOUT = 3
 SSH_TIMEOUT = 6
 LOCAL_TIMEOUT = 20
 ERRORS = (OSError, ValueError, RuntimeError, KeyError, TypeError, subprocess.TimeoutExpired)
+INSTALL_PATH = Path("/usr/local/lib/usbip-bind.py")
+UNIT_PATH = Path("/etc/systemd/system/usbip-bind.service")
+# Arch and Debian name the USB/IP server unit usbipd.service; Fedora and Bazzite
+# name it usbip-server.service.
+USBIPD_UNITS = ("usbipd.service", "usbip-server.service")
+REQUIRED_TOOLS = (
+    "/usr/bin/usbip", "/usr/bin/usbipd", "/usr/bin/ssh", "/usr/bin/python3",
+    "/usr/bin/modprobe", "/usr/bin/systemctl",
+)
+UNIT = """[Unit]
+Description=USB/IP device service for Moonlight
+Requires={usbipd}
+After={usbipd}
+
+[Service]
+Type=simple
+User=root
+ExecStartPre=/usr/bin/modprobe usbip_host
+ExecStart=/usr/bin/python3 -I {path} serve --user {user}
+RuntimeDirectory=usbip-bind
+RuntimeDirectoryMode=0755
+StateDirectory=usbip-bind
+StateDirectoryMode=0700
+
+[Install]
+WantedBy=multi-user.target
+"""
 
 
 def run_raw(argv, ssh_account=None, timeout=LOCAL_TIMEOUT):
@@ -122,12 +156,24 @@ def detect_platform(target, ssh_account=None):
     )
 
 
+def linux_step(args):
+    """One usbip command; `port --until TEXT` repeats `port` until TEXT shows up."""
+    if args[:2] != ["port", "--until"]:
+        return "u " + shlex.join(args)
+    return (
+        '{ i=0; while o=$(u port) || exit; do '
+        'case "$o" in *' + shlex.quote(args[2]) + '*) break;; esac; '
+        'i=$((i+1)); [ "$i" -ge ' + str(PORT_WAIT_TRIES) + ' ] && break; sleep 0.1; '
+        "done; printf '%s\\n' \"$o\"; }"
+    )
+
+
 def remote_command(platform, commands):
     """One remote command line that runs each usbip command in order."""
     separator = f" && echo {MARKER} && "
     if platform == "windows":
         return separator.join(WINDOWS_USBIP + " " + " ".join(args) for args in commands)
-    script = LINUX_RUNNER + separator.join("u " + shlex.join(args) for args in commands)
+    script = LINUX_RUNNER + separator.join(linux_step(args) for args in commands)
     # Run through sh so a non-POSIX login shell (fish, csh) still works.
     return "sh -c " + shlex.quote(script)
 
@@ -370,10 +416,13 @@ def capture(address, user, path, vendor, product, ssh_account, platform=None):
         if not set_export(busid, "bind")["exported"]:
             raise RuntimeError("device did not bind as expected")
         args = ["attach", "-r", server, "-b", busid]
+        port_args = ["port"]
         if platform == "windows":
             args += ["--once", "--terse"]
+        else:
+            port_args += ["--until", f"usbip://{server}:3240/{busid}"]
         attach_output, port_output = remote_usbip(
-            target, platform, [args, ["port"]], ssh_account
+            target, platform, [args, port_args], ssh_account
         )
         if platform == "windows":
             if not re.fullmatch(r"\s*[0-9]+\s*", attach_output):
@@ -672,6 +721,77 @@ def reset(vendor, product, socket_path):
     logging.info("cleared any stale attachment for %s:%s", vendor, product)
 
 
+def systemctl(*args):
+    subprocess.run(["/usr/bin/systemctl", *args], check=True, timeout=60)
+
+
+def write_file(path, content, mode):
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(content)
+    temporary.chmod(mode)
+    os.chown(temporary, 0, 0)
+    temporary.replace(path)
+
+
+def usbipd_unit():
+    for unit in USBIPD_UNITS:
+        found = subprocess.run(
+            ["/usr/bin/systemctl", "cat", unit],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60,
+        )
+        if found.returncode == 0:
+            return unit
+    raise RuntimeError(f"neither {' nor '.join(USBIPD_UNITS)} was found; install the usbip package")
+
+
+def install():
+    """Install this file as the service, for the account that ran sudo."""
+    if os.geteuid() != 0:
+        raise PermissionError("run this with sudo")
+    user = os.environ.get("SUDO_USER", "")
+    if not user or user == "root" or not ACCOUNT.fullmatch(user):
+        raise ValueError(
+            "run it as 'sudo python3 usbip-bind.py install' from the account "
+            "that runs Moonlight (SUDO_USER is not set)"
+        )
+    pwd.getpwnam(user)
+    for tool in REQUIRED_TOOLS:
+        if not os.access(tool, os.X_OK):
+            raise RuntimeError(f"{tool} is missing (Arch: sudo pacman -S usbip openssh python)")
+    unit = UNIT.format(usbipd=usbipd_unit(), path=INSTALL_PATH, user=user)
+    INSTALL_PATH.parent.mkdir(parents=True, exist_ok=True)
+    write_file(INSTALL_PATH, Path(__file__).read_text(), 0o644)
+    write_file(UNIT_PATH, unit, 0o644)
+    systemctl("daemon-reload")
+    systemctl("enable", "usbip-bind.service")
+    systemctl("restart", "usbip-bind.service")
+    time.sleep(1)
+    try:
+        systemctl("is-active", "--quiet", "usbip-bind.service")
+    except subprocess.CalledProcessError:
+        raise RuntimeError(
+            "usbip-bind.service did not start; see: journalctl -u usbip-bind.service"
+        ) from None
+    print(f"usbip-bind.service is running for '{user}' (socket {SOCKET_PATH}).")
+
+
+def uninstall(state_directory=STATE_DIRECTORY):
+    if os.geteuid() != 0:
+        raise PermissionError("run this with sudo")
+    if state_directory.is_dir() and any(state_directory.glob("*.json")):
+        raise RuntimeError(
+            f"devices are still captured ({state_directory} has saved attachments); "
+            "release them from Moonlight first"
+        )
+    if UNIT_PATH.exists():
+        systemctl("disable", "--now", "usbip-bind.service")
+    UNIT_PATH.unlink(missing_ok=True)
+    INSTALL_PATH.unlink(missing_ok=True)
+    systemctl("daemon-reload")
+    print(f"Removed usbip-bind.service. Left in place: {state_directory}.")
+    print("The USB/IP server unit and the usbip packages were not touched.")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="action", required=True)
@@ -686,7 +806,18 @@ def main():
     reset_cmd.add_argument("vendor", help="four hex digit USB vendor ID")
     reset_cmd.add_argument("product", help="four hex digit USB product ID")
     reset_cmd.add_argument("--socket", type=Path, default=SOCKET_PATH)
+    commands.add_parser(
+        "install", help="install this file as usbip-bind.service for the account that ran sudo"
+    )
+    commands.add_parser("uninstall", help="remove usbip-bind.service")
     args = parser.parse_args()
+    if args.action in ("install", "uninstall"):
+        try:
+            install() if args.action == "install" else uninstall()
+        except (*ERRORS, subprocess.CalledProcessError) as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
+        return 0
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     try:
         if args.action == "serve":

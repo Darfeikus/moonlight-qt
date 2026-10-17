@@ -34,7 +34,7 @@ Moonlight sends only the action (`capture` or `release`), the streaming PC's add
 
 #### Requirements
 
-- Python 3.10 or later, OpenSSH, and the distribution's `usbip` tools including `usbipd.service` installed at `/usr/bin/usbip`, `/usr/bin/usbipd` and `/usr/bin/ssh` (Arch: `sudo pacman -S usbip openssh python`).
+- Python 3.10 or later, OpenSSH, and the distribution's `usbip` tools including its USB/IP server unit (`usbipd.service`, or `usbip-server.service` on Fedora and Bazzite) installed at `/usr/bin/usbip`, `/usr/bin/usbipd` and `/usr/bin/ssh` (Arch: `sudo pacman -S usbip openssh python`; Bazzite already includes them).
 - Noninteractive SSH from the account that runs Moonlight to each streaming PC, with its host key already in `known_hosts` (check with `ssh -o BatchMode=yes HOST true`). No SSH agent is used.
 - Streaming PCs: Windows with [USBip for Windows](https://github.com/vadimgrn/usbip-win2) (tested with 0.9.8.1) at `C:\Program Files\USBip\usbip.exe`, or Linux with `usbip`/`vhci_hcd`. The OS is detected over SSH on the first capture and remembered for that PC, so no per-host platform setting is needed.
 - TCP 3240 on this machine must be reachable from the streaming PC. USB/IP itself is neither authenticated nor encrypted.
@@ -42,13 +42,13 @@ Moonlight sends only the action (`capture` or `release`), the streaming PC's add
 
 #### Install
 
-Run the installer from the account that runs Moonlight; it needs root and infers that account from `sudo`:
+The installer is the single file `scripts/usbip-bind.py`, so it can be copied to another PC on its own. Run it from the account that runs Moonlight; it needs root and infers that account from `sudo`:
 
 ```sh
-sudo scripts/install-usbip-service.sh
+sudo python3 usbip-bind.py install
 ```
 
-It installs `/usr/local/lib/usbip-bind.py` and `usbip-bind.service` (root-owned), then enables and starts the service. `usbip-bind.service` starts the standard `usbipd.service` as a dependency, so it is the only unit you enable; no per-device units are needed. No device is exported until requested, and there are no group, polkit, sudoers or firewall changes on this machine.
+It copies itself to `/usr/local/lib/usbip-bind.py`, writes `usbip-bind.service` (both root-owned), then enables and starts the service. Running it again updates an existing install. `usbip-bind.service` starts the standard USB/IP server unit as a dependency (`usbipd.service`, or `usbip-server.service` on Fedora and Bazzite; the installer picks whichever exists), so it is the only unit you enable; no per-device units are needed. No device is exported until requested, and there are no group, polkit, sudoers or firewall changes on this machine.
 
 The service listens on `/run/usbip-bind/control.sock`, owned by that account (mode 0600). It also checks each caller's Unix credentials, so only that account (or root) can capture or release devices. SSH runs as that account, so its keys, `known_hosts` and `~/.ssh/config` apply.
 
@@ -83,7 +83,7 @@ Open **Settings → Input Settings → USB devices to capture** and tick the dev
 
 #### How it behaves
 
-- Capture first probes the streaming PC over SSH (OS if not yet known, existing imports), and only then binds the device locally, so an unreachable PC leaves the device local. If the device is still exported from an earlier attempt, it is unbound first. Attach and port verification then run in a single SSH call. The OS and SSH account used are saved per device under `/var/lib/usbip-bind`, so release uses the same ones even if you change the SSH user meanwhile.
+- Capture first probes the streaming PC over SSH (OS if not yet known, existing imports), and only then binds the device locally, so an unreachable PC leaves the device local. If the device is still exported from an earlier attempt, it is unbound first. Attach and port verification then run in a single SSH call. A Linux PC lists the device only once it has finished setting it up, a moment after the attach, so there the port check repeats for up to about 3 seconds. The OS and SSH account used are saved per device under `/var/lib/usbip-bind`, so release uses the same ones even if you change the SSH user meanwhile.
 - A capture that fails after binding is rolled back: anything attached remotely is detached and the device is unbound locally.
 - Release unbinds locally first, so the device is back immediately, then detaches the remote port as a best effort. A Linux streaming PC clears the import on its own; on Windows it looks like the device was unplugged. On Windows, USBip for Windows then keeps trying to re-attach the device (its `--once` option only covers the first connection), so release also runs `attach --stop` for that device in the same SSH call. A failed remote step is only logged. Every capture on a Windows PC runs `--stop` before binding too, so leftover attempts (for example after a release while that PC was unreachable) cannot take the device, and any leftover import of this machine's device is detached.
 - If the saved device was unplugged or moved to another USB port, release leaves that bus ID alone and just clears the saved state.
@@ -103,7 +103,7 @@ Windows `usbip.exe` commands the service runs (shown for manual testing; replace
 "C:\Program Files\USBip\usbip.exe" detach -p ATTACHED_PORT
 ```
 
-`--once` only stops Windows from retrying if the first connection fails, and `--terse` prints the attached port. Once attached, Windows retries whenever the connection drops until `--stop` is run for that device; it succeeds even when nothing is retrying. If this machine's `usbipd` log (`journalctl -u usbipd.service`) keeps showing connections from a PC that is not streaming, run that `--stop` command on it.
+`--once` only stops Windows from retrying if the first connection fails, and `--terse` prints the attached port. Once attached, Windows retries whenever the connection drops until `--stop` is run for that device; it succeeds even when nothing is retrying. If this machine's `usbipd` log (`journalctl -u usbipd.service`, or `-u usbip-server.service` on Fedora) keeps showing connections from a PC that is not streaming, run that `--stop` command on it.
 
 #### Troubleshooting, uninstall and tests
 
@@ -125,10 +125,10 @@ python3 /usr/local/lib/usbip-bind.py reset 046d c547
 This skips the streaming PC entirely but still checks local USB topology and reports
 local unbind failures. Only use it when you intend to abandon the saved attachment.
 
-To uninstall, first release any captured devices (the installer refuses otherwise). `/var/lib/usbip-bind` is left in place, and `usbipd.service` and the `usbip` packages are untouched:
+To uninstall, first release any captured devices (the installer refuses otherwise). `/var/lib/usbip-bind` is left in place, and the USB/IP server unit and the `usbip` packages are untouched:
 
 ```sh
-sudo scripts/install-usbip-service.sh --uninstall
+sudo python3 /usr/local/lib/usbip-bind.py uninstall
 ```
 
 Run the service tests without touching a real device:

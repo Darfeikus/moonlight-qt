@@ -296,8 +296,13 @@ class HandoffTests(unittest.TestCase):
         self.host.platform = "linux"
         self.assertEqual(self.capture(), "linux")
         self.assertEqual(service.read_state(self.state)["port"], 0)
-        attach = self.remote_mock.call_args.args[2][0]
+        attach, port = self.remote_mock.call_args.args[2]
         self.assertNotIn("--once", attach)
+        self.assertEqual(port, ["port", "--until", f"usbip://{SERVER}:3240/{BUSID}"])
+
+    def test_windows_port_check_does_not_wait(self):
+        self.capture()
+        self.assertEqual(self.remote_mock.call_args.args[2][1], ["port"])
 
     def test_duplicate_capture_does_not_attach(self):
         self.attached_elsewhere()
@@ -573,11 +578,11 @@ class CommandTests(unittest.TestCase):
             f" && echo --usbip-bind-- && {service.WINDOWS_USBIP} port"
         ))
 
-    def run_linux(self, commands, agent=True):
+    def run_linux(self, commands, agent=True, script=None):
         """Run the Linux command line through sh, with stand-ins for the agent and sudo."""
         with tempfile.TemporaryDirectory() as directory:
             fake = Path(directory) / "fake"
-            fake.write_text('#!/bin/sh\necho "$(basename "$0") $*"\n')
+            fake.write_text(script or '#!/bin/sh\necho "$(basename "$0") $*"\n')
             fake.chmod(0o755)
             agent_path = Path(directory) / "agent"
             if agent:
@@ -605,6 +610,39 @@ class CommandTests(unittest.TestCase):
             self.run_linux([["detach", "-p", "0"]], agent=False),
             ["sudo -n /usr/bin/usbip detach -p 0\n"],
         )
+
+    # Lists the device only from the agent's third call on, like a Linux PC that is
+    # still enumerating it; every call is appended to the "calls" file next to it.
+    ENUMERATING_AGENT = (
+        '#!/bin/sh\necho "$*" >> "$(dirname "$0")/calls"\n'
+        'if [ "$1" = port ] && [ "$(wc -l < "$(dirname "$0")/calls")" -ge 3 ]; then\n'
+        f'  printf "Port 00: <Port in Use>\\n  -> usbip://{SERVER}:3240/{BUSID}\\n"\n'
+        'else echo "$*"; fi\n'
+    )
+
+    @unittest.skipIf(os.geteuid() == 0, "the root branch runs usbip directly")
+    def test_linux_port_check_waits_until_the_device_is_listed(self):
+        until = ["port", "--until", f"usbip://{SERVER}:3240/{BUSID}"]
+        outputs = self.run_linux(
+            [["attach", "-r", SERVER, "-b", BUSID], until], script=self.ENUMERATING_AGENT
+        )
+        self.assertEqual(outputs[0], f"attach -r {SERVER} -b {BUSID}\n")
+        self.assertEqual(
+            service.imported_ports(outputs[1]), {0: (SERVER, 3240, BUSID)}
+        )
+
+    @unittest.skipIf(os.geteuid() == 0, "the root branch runs usbip directly")
+    def test_linux_port_check_gives_up_with_the_last_listing(self):
+        until = ["port", "--until", f"usbip://{SERVER}:3240/{BUSID}"]
+        with patch.object(service, "PORT_WAIT_TRIES", 2):
+            outputs = self.run_linux([until])
+        self.assertEqual(outputs, ["agent port\n"])
+
+    @unittest.skipIf(os.geteuid() == 0, "the root branch runs usbip directly")
+    def test_linux_port_check_stops_when_port_fails(self):
+        until = ["port", "--until", f"usbip://{SERVER}:3240/{BUSID}"]
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.run_linux([until], script="#!/bin/sh\nexit 3\n")
 
     def test_linux_command_survives_non_posix_login_shells(self):
         command = service.remote_command("linux", [["port"]])
@@ -1133,3 +1171,99 @@ class ServiceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class InstallTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        root = Path(self.directory.name)
+        self.state = root / "state"
+        self.units = {"usbipd.service"}
+        self.patches = [
+            patch.object(service, "INSTALL_PATH", root / "lib" / "usbip-bind.py"),
+            patch.object(service, "UNIT_PATH", root / "usbip-bind.service"),
+            patch.object(service.os, "chown"),
+            patch.object(service.os, "geteuid", return_value=0),
+            patch.object(service.os, "access", return_value=True),
+            patch.object(service.time, "sleep"),
+            patch.object(service.subprocess, "run", side_effect=self.systemctl_cat),
+            patch.dict(service.os.environ, {"SUDO_USER": LOCAL_USER}),
+        ]
+        for item in self.patches:
+            item.start()
+            self.addCleanup(item.stop)
+
+    def systemctl_cat(self, argv, **_):
+        self.assertEqual(argv[:2], ["/usr/bin/systemctl", "cat"])
+        return subprocess.CompletedProcess(argv, 0 if argv[2] in self.units else 1)
+
+    def install(self):
+        with patch.object(service, "systemctl") as systemctl:
+            service.install()
+        return systemctl
+
+    def test_install_copies_itself_and_writes_the_unit(self):
+        systemctl = self.install()
+        self.assertEqual(service.INSTALL_PATH.read_text(), Path(service.__file__).read_text())
+        self.assertEqual(service.INSTALL_PATH.stat().st_mode & 0o777, 0o644)
+        unit = service.UNIT_PATH.read_text()
+        self.assertIn(f"-I {service.INSTALL_PATH} serve --user {LOCAL_USER}\n", unit)
+        self.assertIn("Requires=usbipd.service\nAfter=usbipd.service\n", unit)
+        self.assertEqual(
+            [c.args[0] for c in systemctl.call_args_list],
+            ["daemon-reload", "enable", "restart", "is-active"],
+        )
+
+    def test_install_uses_fedoras_usbip_server_unit(self):
+        self.units = {"usbip-server.service"}
+        self.install()
+        self.assertIn("Requires=usbip-server.service\n", service.UNIT_PATH.read_text())
+
+    def test_missing_usbipd_unit_is_reported_before_writing(self):
+        self.units = set()
+        with self.assertRaisesRegex(RuntimeError, "usbip-server.service was found"):
+            self.install()
+        self.assertFalse(service.INSTALL_PATH.exists())
+
+    def test_install_needs_root_and_a_sudo_user(self):
+        for user in ("", "root", "bad name"):
+            with self.subTest(user=user), patch.dict(service.os.environ, {"SUDO_USER": user}):
+                with self.assertRaisesRegex(ValueError, "SUDO_USER"):
+                    self.install()
+        with patch.object(service.os, "geteuid", return_value=1000):
+            with self.assertRaisesRegex(PermissionError, "sudo"):
+                self.install()
+        with patch.object(service.os, "access", return_value=False):
+            with self.assertRaisesRegex(RuntimeError, "is missing"):
+                self.install()
+        self.assertFalse(service.INSTALL_PATH.exists())
+
+    def test_failed_start_points_to_the_journal(self):
+        def systemctl(*args):
+            if args[0] == "is-active":
+                raise subprocess.CalledProcessError(3, args)
+
+        with patch.object(service, "systemctl", side_effect=systemctl):
+            with self.assertRaisesRegex(RuntimeError, "journalctl -u usbip-bind.service"):
+                service.install()
+
+    def test_uninstall_removes_files(self):
+        self.install()
+        with patch.object(service, "systemctl") as systemctl:
+            service.uninstall(self.state)
+        self.assertFalse(service.INSTALL_PATH.exists() or service.UNIT_PATH.exists())
+        self.assertEqual(
+            [c.args[:2] for c in systemctl.call_args_list],
+            [("disable", "--now"), ("daemon-reload",)],
+        )
+
+    def test_uninstall_refuses_while_devices_are_captured(self):
+        self.install()
+        self.state.mkdir()
+        (self.state / "046d-c547.json").write_text("{}")
+        with patch.object(service, "systemctl") as systemctl:
+            with self.assertRaisesRegex(RuntimeError, "still captured"):
+                service.uninstall(self.state)
+        systemctl.assert_not_called()
+        self.assertTrue(service.INSTALL_PATH.exists())
