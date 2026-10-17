@@ -9,6 +9,10 @@
 #include <QDir>
 #include <QGuiApplication>
 
+#ifdef Q_OS_LINUX
+#include "streaming/usbip/usbipclient.h"
+#endif
+
 SdlInputHandler::SdlInputHandler(StreamingPreferences& prefs, int streamWidth, int streamHeight)
     : m_MultiController(prefs.multiController),
       m_GamepadMouse(prefs.gamepadMouse),
@@ -23,6 +27,8 @@ SdlInputHandler::SdlInputHandler(StreamingPreferences& prefs, int streamWidth, i
       m_KeyboardCaptureActive(false),
       m_CaptureSystemKeysMode(prefs.captureSysKeysMode),
       m_MouseCursorCapturedVisibilityState(SDL_DISABLE),
+      m_UsbipDevices(prefs.usbipDevices),
+      m_HardwareCaptureForwarded(false),
       m_LongPressTimer(0),
       m_StreamWidth(streamWidth),
       m_StreamHeight(streamHeight),
@@ -402,6 +408,42 @@ void SdlInputHandler::setCaptureActive(bool active)
 
     // Now update the keyboard grab
     updateKeyboardGrabState();
+
+    // Forward the selected USB devices on capture state transitions
+    dispatchUsbipCapture(active);
+}
+
+void SdlInputHandler::setHostAddress(const QString& address, const QString& sshUser)
+{
+    m_HostAddress = address;
+    m_HostSshUser = sshUser;
+}
+
+void SdlInputHandler::dispatchUsbipCapture(bool active)
+{
+    // Only act on genuine transitions to avoid duplicate requests from
+    // repeated same-state calls to setCaptureActive().
+    if (active == m_HardwareCaptureForwarded) {
+        return;
+    }
+
+    m_HardwareCaptureForwarded = active;
+
+#ifdef Q_OS_LINUX
+    if (m_UsbipDevices.isEmpty() || m_HostAddress.isEmpty()) {
+        return;
+    }
+
+    // The client queues these on its own worker thread, so this never stalls
+    // the event/render thread, and the app drains it before exiting.
+    UsbipClient* client = UsbipClient::get();
+    for (const QString& device : m_UsbipDevices) {
+        QStringList ids = device.split(':');
+        if (ids.size() == 2) {
+            client->submit(active ? "capture" : "release", m_HostAddress, m_HostSshUser, ids[0], ids[1]);
+        }
+    }
+#endif
 }
 
 void SdlInputHandler::handleTouchFingerEvent(SDL_TouchFingerEvent* event)

@@ -43,6 +43,10 @@ public:
 
     Q_INVOKABLE void renameComputer(int computerIndex, QString name);
 
+    Q_INVOKABLE QString sshUserForComputer(int computerIndex);
+
+    Q_INVOKABLE bool setSshUserForComputer(int computerIndex, QString user);
+
     Q_INVOKABLE Session* createSessionForCurrentGame(int computerIndex);
 
 signals:

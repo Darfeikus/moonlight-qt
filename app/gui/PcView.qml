@@ -8,6 +8,7 @@ import ComputerManager 1.0
 import StreamingPreferences 1.0
 import SystemProperties 1.0
 import SdlGamepadKeyNavigation 1.0
+import UsbipDevices 1.0
 
 CenteredGridView {
     property ComputerModel computerModel : createModel()
@@ -202,6 +203,16 @@ CenteredGridView {
                     }
                 }
                 NavigableMenuItem {
+                    visible: UsbipDevices.supported
+                    text: qsTr("Specify SSH user")
+                    onTriggered: {
+                        sshUserDialog.pcIndex = index
+                        sshUserDialog.pcName = model.name
+                        sshUserDialog.currentUser = computerModel.sshUserForComputer(index)
+                        sshUserDialog.open()
+                    }
+                }
+                NavigableMenuItem {
                     text: qsTr("Delete PC")
                     onTriggered: {
                         deletePcDialog.pcIndex = index
@@ -388,6 +399,59 @@ CenteredGridView {
                 Keys.onEnterPressed: {
                     renamePcDialog.accept()
                 }
+            }
+        }
+    }
+
+    NavigableDialog {
+        id: sshUserDialog
+        property string pcName
+        property string currentUser
+        property int pcIndex : -1;
+        property bool validUser: sshUserText.text === "" || /^[A-Za-z_][A-Za-z0-9_.-]*$/.test(sshUserText.text)
+
+        standardButtons: Dialog.Ok | Dialog.Cancel
+
+        Component.onCompleted: {
+            standardButton(Dialog.Ok).enabled = Qt.binding(function() { return validUser })
+        }
+
+        onOpened: {
+            sshUserText.text = currentUser
+            sshUserText.forceActiveFocus()
+            sshUserText.selectAll()
+        }
+
+        onAccepted: {
+            computerModel.setSshUserForComputer(pcIndex, sshUserText.text)
+        }
+
+        ColumnLayout {
+            Label {
+                text: qsTr("SSH user for USB/IP on %1:").arg(sshUserDialog.pcName)
+                font.bold: true
+            }
+
+            TextField {
+                id: sshUserText
+                placeholderText: qsTr("Default SSH login")
+                Layout.fillWidth: true
+                focus: true
+
+                Keys.onReturnPressed: {
+                    if (sshUserDialog.validUser) sshUserDialog.accept()
+                }
+
+                Keys.onEnterPressed: {
+                    if (sshUserDialog.validUser) sshUserDialog.accept()
+                }
+            }
+
+            Label {
+                text: sshUserDialog.validUser ? qsTr("Leave empty to use the default login for this PC.")
+                                              : qsTr("Use only letters, digits, '_', '.' and '-', starting with a letter or '_'.")
+                wrapMode: Text.Wrap
+                Layout.maximumWidth: 400
             }
         }
     }

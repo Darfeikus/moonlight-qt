@@ -113,6 +113,8 @@ public:
     QSslCertificate serverCert;
     QVector<NvApp> appList;
     bool isNvidiaServerSoftware;
+    // SSH account used for USB/IP on this PC; empty means the default for the address
+    QString sshUser;
     // Remember to update isEqualSerialized() when adding fields here!
 
     // Synchronization

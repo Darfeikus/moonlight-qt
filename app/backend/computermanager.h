@@ -242,6 +242,9 @@ public:
 
     void renameHost(NvComputer* computer, QString name);
 
+    // Empty clears the account so USB/IP uses the default SSH login. Returns false for an invalid name.
+    bool setSshUser(NvComputer* computer, QString user);
+
     void clientSideAttributeUpdated(NvComputer* computer);
 
 signals:
