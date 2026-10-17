@@ -265,6 +265,12 @@ Flickable {
                                 is_custom: false
                             }
                             ListElement {
+                                text: qsTr("1600p")
+                                video_width: "2560"
+                                video_height: "1600"
+                                is_custom: false
+                            }
+                            ListElement {
                                 text: qsTr("4K")
                                 video_width: "3840"
                                 video_height: "2160"
