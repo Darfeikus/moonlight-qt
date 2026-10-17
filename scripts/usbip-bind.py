@@ -113,10 +113,13 @@ def remote_usbip(target, info, args, ssh_account=None):
         command = "LC_ALL=C " + prefix + "/usr/bin/usbip " + shlex.join(args)
     result = ssh_raw(target, command, ssh_account)
     if result.returncode:
-        raise RuntimeError(
+        message = (
             f"usbip {args[0]} on {target} failed ({result.returncode}): "
             f"{result.stderr.strip()} {result.stdout.strip()}"
         )
+        if result.returncode == SSH_FAILURE:
+            raise HostUnreachable(message)
+        raise RuntimeError(message)
     return result.stdout
 
 
@@ -253,11 +256,31 @@ def read_state(path):
     return state
 
 
+class HostUnreachable(RuntimeError):
+    """SSH itself could not reach or authenticate to the remote host, as opposed
+    to the remote usbip command running and failing for some other reason."""
+
+
 def capture(address, user, path, vendor, product, ssh_account):
     state = read_state(path)
     local = device("status", vendor, product)
     if state:
         if state["host"] != address:
+            old_target = ssh_target(state["host"], state["ssh_user"])
+            try:
+                remote_usbip(old_target, state, ["port"], ssh_account)
+            except HostUnreachable:
+                # The old host is provably gone (connection refused/timed out/no
+                # route), not just slow or flaky, so it cannot still be holding
+                # the device. Safe to clear the stale record and retry fresh.
+                logging.warning(
+                    "previous host %s is unreachable; force-releasing the stale "
+                    "attachment before capturing on %s", state["host"], address,
+                )
+                release(path, vendor, product, ssh_account, force=True)
+                return capture(address, user, path, vendor, product, ssh_account)
+            except ERRORS:
+                pass
             raise RuntimeError("release the previous host before capturing another")
         target = ssh_target(state["host"], state["ssh_user"])
         ports = imported_ports(remote_usbip(target, state, ["port"], ssh_account))
@@ -312,7 +335,7 @@ def capture(address, user, path, vendor, product, ssh_account):
     logging.info("attached device to %s port %s", address, state["port"])
 
 
-def release(path, vendor, product, ssh_account):
+def release(path, vendor, product, ssh_account, force=False):
     state = read_state(path)
     errors = []
     if state:
@@ -331,7 +354,13 @@ def release(path, vendor, product, ssh_account):
                     raise RuntimeError("saved port belongs to another device; refusing detach")
                 remote_usbip(target, state, ["detach", "-p", str(port)], ssh_account)
         except ERRORS as error:
-            errors.append(f"remote detach: {error}")
+            if force:
+                # The caller has confirmed the old host is gone for good; drop the
+                # remote detach failure so a dead host can't permanently wedge the
+                # local state. Local safety checks below still apply.
+                logging.warning("force release: ignoring remote detach failure: %s", error)
+            else:
+                errors.append(f"remote detach: {error}")
     try:
         local = device("status", vendor, product)
         if state and local["busid"] != state["busid"]:
@@ -363,10 +392,15 @@ class Controller:
                 raise ValueError("list takes no parameters")
             return {"devices": list_devices()}
         required = {"action", "host", "vendor", "product"}
-        if not required <= set(request) <= required | {"user"}:
-            raise ValueError("expected action, host, vendor, product and optionally user")
+        if not required <= set(request) <= required | {"user", "force"}:
+            raise ValueError("expected action, host, vendor, product and optionally user, force")
         if action not in ("capture", "release", "status"):
             raise ValueError("unknown device command")
+        force = request.get("force", False)
+        if not isinstance(force, bool):
+            raise ValueError("force must be a boolean")
+        if force and action != "release":
+            raise ValueError("force is only valid for release")
         vendor, product = request["vendor"], request["product"]
         if (
             not isinstance(vendor, str) or not isinstance(product, str)
@@ -389,11 +423,11 @@ class Controller:
                 **device("status", vendor, product),
                 "attachment": read_state(path),
             }
-        logging.info("%s %s:%s on %s", action, vendor, product, address)
+        logging.info("%s %s:%s on %s%s", action, vendor, product, address, " (forced)" if force else "")
         if action == "capture":
             capture(address, ssh_user, path, vendor, product, self.account)
         else:
-            release(path, vendor, product, self.account)
+            release(path, vendor, product, self.account, force=force)
         return {"action": action, "vendor": vendor, "product": product}
 
 
@@ -449,17 +483,46 @@ def serve(user, socket_path, state_directory):
             socket_path.unlink(missing_ok=True)
 
 
+def reset(vendor, product, socket_path):
+    """Force-release a device over the running service's socket, bypassing the
+    requirement to reach the host it was last attached to. Use this when that
+    host is gone for good (decommissioned, reinstalled, address reused)."""
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+        connection.settimeout(90)
+        connection.connect(str(socket_path))
+        request = {
+            "action": "release", "host": "localhost",
+            "vendor": vendor, "product": product, "force": True,
+        }
+        connection.sendall(json.dumps(request).encode() + b"\n")
+        with connection.makefile("rb") as response:
+            reply = json.loads(response.readline())
+    if not reply["ok"]:
+        raise RuntimeError(reply["error"])
+    logging.info("cleared any stale attachment for %s:%s", vendor, product)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="action", required=True)
-    service = commands.add_parser("serve", help="run the root command service")
-    service.add_argument("--user", required=True, help="account that runs Moonlight")
-    service.add_argument("--state-directory", type=Path, default=STATE_DIRECTORY)
-    service.add_argument("--socket", type=Path, default=SOCKET_PATH)
+    service_cmd = commands.add_parser("serve", help="run the root command service")
+    service_cmd.add_argument("--user", required=True, help="account that runs Moonlight")
+    service_cmd.add_argument("--state-directory", type=Path, default=STATE_DIRECTORY)
+    service_cmd.add_argument("--socket", type=Path, default=SOCKET_PATH)
+    reset_cmd = commands.add_parser(
+        "reset",
+        help="force-release a device stuck on an unreachable host (requires the service to be running)",
+    )
+    reset_cmd.add_argument("vendor", help="four hex digit USB vendor ID")
+    reset_cmd.add_argument("product", help="four hex digit USB product ID")
+    reset_cmd.add_argument("--socket", type=Path, default=SOCKET_PATH)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     try:
-        serve(args.user, args.socket, args.state_directory)
+        if args.action == "serve":
+            serve(args.user, args.socket, args.state_directory)
+        else:
+            reset(args.vendor, args.product, args.socket)
     except ERRORS as error:
         logging.error("%s", error)
         return 1

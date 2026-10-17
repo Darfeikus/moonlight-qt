@@ -89,8 +89,8 @@ class HandoffTests(unittest.TestCase):
     def capture(self, user=None, host=HOST):
         service.capture(host, user, self.state, "046d", "c547", None)
 
-    def release(self):
-        service.release(self.state, "046d", "c547", None)
+    def release(self, force=False):
+        service.release(self.state, "046d", "c547", None, force=force)
 
     def test_windows_capture_once_and_targeted_release(self):
         self.remote_mock.side_effect = ["", "1\n", ports()]
@@ -183,6 +183,33 @@ class HandoffTests(unittest.TestCase):
             self.release()
         self.assertFalse(self.exported)
 
+    def test_force_release_clears_state_despite_unreachable_host(self):
+        self.saved()
+        self.exported = True
+        self.remote_mock.side_effect = subprocess.TimeoutExpired("ssh", 20)
+        self.release(force=True)
+        self.assertFalse(self.exported)
+        self.assertFalse(self.state.exists())
+
+    def test_force_release_still_reports_local_unbind_failure(self):
+        self.saved()
+        self.remote_mock.side_effect = subprocess.TimeoutExpired("ssh", 20)
+        self.device_mock.side_effect = [
+            {"busid": BUSID, "exported": True}, RuntimeError("unbind failed"),
+        ]
+        with self.assertRaisesRegex(RuntimeError, "local unbind"):
+            self.release(force=True)
+        self.assertTrue(self.state.exists())
+
+    def test_force_release_still_honors_topology_change(self):
+        self.saved()
+        self.busid = "3-2"
+        self.remote_mock.side_effect = subprocess.TimeoutExpired("ssh", 20)
+        with self.assertRaisesRegex(RuntimeError, "topology changed"):
+            self.release(force=True)
+        self.assertNotIn("unbind", [c.args[0] for c in self.device_mock.call_args_list])
+        self.assertTrue(self.state.exists())
+
     def test_stale_port_never_detaches_other_device(self):
         self.saved()
         self.exported = True
@@ -212,12 +239,40 @@ class HandoffTests(unittest.TestCase):
         self.remote_mock.assert_not_called()
         self.assertFalse(self.exported)
 
-    def test_host_switch_requires_release(self):
+    def test_host_switch_requires_release_when_old_host_is_reachable(self):
         self.saved()
+        self.remote_mock.return_value = ports()
         with self.assertRaisesRegex(RuntimeError, "previous host"):
             self.capture(host="192.168.1.62")
         self.assertFalse(self.exported)
-        self.remote_mock.assert_not_called()
+        self.assertEqual(self.remote_mock.call_count, 1)
+        self.assertEqual(self.remote_mock.call_args.args[2], ["port"])
+
+    def test_host_switch_requires_release_when_remote_probe_errors(self):
+        self.saved()
+        self.exported = True
+        self.remote_mock.side_effect = RuntimeError("permission denied")
+        with self.assertRaisesRegex(RuntimeError, "previous host"):
+            self.capture(host="192.168.1.62")
+        # A non-connectivity error doesn't prove the old host is gone, so the
+        # device must stay bound rather than risk a double attach.
+        self.assertTrue(self.exported)
+        self.assertEqual(self.remote_mock.call_count, 1)
+
+    def test_host_switch_auto_recovers_when_old_host_is_unreachable(self):
+        self.saved()
+        self.exported = True
+        self.remote_mock.side_effect = [
+            service.HostUnreachable("no route to host"),  # pre-check probe
+            service.HostUnreachable("no route to host"),  # release()'s own probe
+            "",  # fresh capture: port probe on the new host
+            "1\n",  # fresh capture: attach
+            ports(),  # fresh capture: port verify
+        ]
+        self.capture(host="192.168.1.62")
+        saved = service.read_state(self.state)
+        self.assertEqual(saved["host"], "192.168.1.62")
+        self.assertEqual(self.remote_mock.call_count, 5)
 
     def test_stale_capture_requires_explicit_release(self):
         self.saved()
@@ -568,6 +623,24 @@ class ServiceTests(unittest.TestCase):
             self.controller.execute(self.request(user=""))
             self.controller.execute(self.request(user="racso"))
         self.assertEqual([c.args[1] for c in call.call_args_list], [None, None, "racso"])
+
+    def test_force_defaults_false_and_is_forwarded_to_release(self):
+        with patch.object(service, "release") as call:
+            self.controller.execute(self.request(action="release"))
+            self.controller.execute(self.request(action="release", force=True))
+        self.assertEqual([c.kwargs["force"] for c in call.call_args_list], [False, True])
+
+    def test_force_is_rejected_for_capture(self):
+        with patch.object(service, "capture") as call:
+            with self.assertRaisesRegex(ValueError, "only valid for release"):
+                self.controller.execute(self.request(action="capture", force=True))
+        call.assert_not_called()
+
+    def test_non_boolean_force_is_rejected(self):
+        with patch.object(service, "release") as call:
+            with self.assertRaisesRegex(ValueError, "force must be a boolean"):
+                self.controller.execute(self.request(action="release", force="yes"))
+        call.assert_not_called()
 
     def test_invalid_ssh_user_rejected_before_any_command(self):
         for user in ("-oProxyCommand=x", "a b", "x@y", "a;b", 5, ["x"]):
