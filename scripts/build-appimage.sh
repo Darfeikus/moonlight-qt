@@ -92,34 +92,8 @@ if [ -n "$SYSTEM_LIBVA" ]; then
 fi
 
 APP_RUN=$BUILD_ROOT/AppRun-libva
-cat > $APP_RUN <<'APPRUN_EOF'
-#!/bin/bash
-# AppRun: prefer the host libva; use the staged copy only if the host cannot run us.
-#
-# VA-API driver modules on the host are loaded by libva and export an entrypoint
-# named after the libva version they were built against (__vaDriverInit_1_XX).
-# A libva can only load drivers that are not newer than itself, so bundling our
-# own (older) libva silently breaks hardware decoding on up-to-date distros.
-# Distros keep host libva and host drivers in step, so whenever the host libva
-# can satisfy Moonlight's own ELF version requirements it is the right choice.
-#
-# "Can satisfy" is answered here by libva-probe, a tiny program linked against
-# the same versioned libva symbols as Moonlight and the bundled FFmpeg: if the
-# dynamic loader can start it, the host libva works; if not (no libva installed,
-# or one too old to link), we make the staged build-environment copy visible
-# via LD_LIBRARY_PATH, matching the pre-existing bundled behavior.
-APPDIR="${APPDIR:-$(dirname "$(readlink -f "$0")")}"
-LIBVA_FALLBACK="$APPDIR/opt/libva-fallback"
-
-if [ -d "$LIBVA_FALLBACK" ] && ! "$LIBVA_FALLBACK/libva-probe" 2>/dev/null; then
-    export LD_LIBRARY_PATH="$LIBVA_FALLBACK${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-    export VAAPI_USE_FALLBACK_PATHS=1
-fi
-
-exec "$APPDIR/usr/bin/moonlight" "$@"
-APPRUN_EOF
+cp "$SOURCE_ROOT/app/deploy/linux/AppRun" "$APP_RUN" || fail "Unable to stage AppRun!"
 chmod +x $APP_RUN
-
 echo Creating AppImage
 pushd $INSTALLER_FOLDER
 # Don't bundle libva: the bundled build-environment version (jammy: VA-API 1.20/1.22)

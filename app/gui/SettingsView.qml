@@ -1429,6 +1429,24 @@ Flickable {
                 }
 
                 CheckBox {
+                    id: rightAltToReleaseInputCheck
+                    hoverEnabled: true
+                    width: parent.width
+                    text: qsTr("Use Right Alt to release captured input")
+                    font.pointSize: 12
+                    enabled: SystemProperties.hasDesktopEnvironment
+                    checked: StreamingPreferences.rightAltToReleaseInput
+                    onCheckedChanged: {
+                        StreamingPreferences.rightAltToReleaseInput = checked
+                    }
+
+                    ToolTip.delay: 1000
+                    ToolTip.timeout: 10000
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("Replace Ctrl+Alt+Shift+Z with Right Alt to toggle mouse and keyboard capture. When unchecked, Right Alt is sent to the host normally. Applies to the next stream.")
+                }
+
+                CheckBox {
                     id: absoluteTouchCheck
                     hoverEnabled: true
                     width: parent.width

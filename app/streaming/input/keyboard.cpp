@@ -195,15 +195,16 @@ void SdlInputHandler::handleKeyEvent(SDL_KeyboardEvent* event)
         return;
     }
 
-    // Let the user release captured input with a single Right Alt key press.
+    // The optional Right Alt shortcut does not require other modifiers.
     if ((event->state == SDL_PRESSED) &&
             m_SpecialKeyCombos[KeyComboUngrabInput].enabled &&
+            m_SpecialKeyCombos[KeyComboUngrabInput].scanCode == SDL_SCANCODE_RALT &&
             event->keysym.scancode == m_SpecialKeyCombos[KeyComboUngrabInput].scanCode) {
         performSpecialKeyCombo(KeyComboUngrabInput);
         return;
     }
 
-    // Check for our remaining special key combos
+    // Check for our special key combos
     if ((event->state == SDL_PRESSED) &&
             (event->keysym.mod & KMOD_CTRL) &&
             (event->keysym.mod & KMOD_ALT) &&
@@ -220,9 +221,6 @@ void SdlInputHandler::handleKeyEvent(SDL_KeyboardEvent* event)
         // the scancode of another.
 
         for (int i = 0; i < KeyComboMax; i++) {
-            if (m_SpecialKeyCombos[i].keyCombo == KeyComboUngrabInput) {
-                continue;
-            }
             if (m_SpecialKeyCombos[i].enabled && event->keysym.sym == m_SpecialKeyCombos[i].keyCode) {
                 performSpecialKeyCombo(m_SpecialKeyCombos[i].keyCombo);
                 return;
@@ -230,9 +228,6 @@ void SdlInputHandler::handleKeyEvent(SDL_KeyboardEvent* event)
         }
 
         for (int i = 0; i < KeyComboMax; i++) {
-            if (m_SpecialKeyCombos[i].keyCombo == KeyComboUngrabInput) {
-                continue;
-            }
             if (m_SpecialKeyCombos[i].enabled && event->keysym.scancode == m_SpecialKeyCombos[i].scanCode) {
                 performSpecialKeyCombo(m_SpecialKeyCombos[i].keyCombo);
                 return;

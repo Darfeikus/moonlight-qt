@@ -1,0 +1,24 @@
+#!/bin/sh
+
+launcher=$(readlink -f -- "$0") || {
+    echo "Moonlight launcher: cannot resolve executable path" >&2
+    exit 1
+}
+
+appdir=$(dirname -- "$launcher")
+runtime="$appdir/moonlight-libs/lib"
+for library in libSDL2-2.0.so.0 libSDL3.so.0; do
+    if [ ! -r "$runtime/$library" ]; then
+        echo "Moonlight launcher: missing patched SDL runtime: $runtime/$library" >&2
+        exit 1
+    fi
+done
+export LD_LIBRARY_PATH="$runtime${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+if [ "${XDG_CURRENT_DESKTOP:-}" = gamescope ]; then
+    export QT_QPA_PLATFORM=xcb
+else
+    export QT_QPA_PLATFORM=wayland
+fi
+
+exec "$appdir/moonlight-native" "$@"

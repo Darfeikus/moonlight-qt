@@ -47,6 +47,15 @@ private:
 SystemProperties::SystemProperties()
 {
     versionString = QString(VERSION_STR);
+#ifdef FORK_RELEASE_NAME
+    releaseName = QString(FORK_RELEASE_NAME);
+#else
+    releaseName = tr("Development (%1)").arg(versionString);
+#endif
+    releaseUrl = QUrl(QStringLiteral("https://github.com/Darfeikus/moonlight-qt/releases"));
+#ifdef FORK_RELEASE_TAG
+    releaseUrl.setPath(releaseUrl.path() + QStringLiteral("/tag/") + QStringLiteral(FORK_RELEASE_TAG));
+#endif
     hasDesktopEnvironment = WMUtils::isRunningDesktopEnvironment();
     isRunningWayland = WMUtils::isRunningWayland();
     isRunningXWayland = isRunningWayland && QGuiApplication::platformName() == "xcb";

@@ -2,6 +2,7 @@
 
 #include <QObject>
 #include <QRect>
+#include <QUrl>
 
 #include "SDL_compat.h"
 
@@ -26,6 +27,8 @@ public:
     Q_PROPERTY(bool hasDiscordIntegration MEMBER hasDiscordIntegration CONSTANT)
     Q_PROPERTY(bool usesMaterial3Theme MEMBER usesMaterial3Theme CONSTANT)
     Q_PROPERTY(QString versionString MEMBER versionString CONSTANT)
+    Q_PROPERTY(QString releaseName MEMBER releaseName CONSTANT)
+    Q_PROPERTY(QUrl releaseUrl MEMBER releaseUrl CONSTANT)
 
     // Properties queried asynchronously (startAsyncLoad() must be called!)
     Q_PROPERTY(bool hasHardwareAcceleration MEMBER hasHardwareAcceleration NOTIFY hasHardwareAccelerationChanged)
@@ -66,6 +69,8 @@ private:
     bool hasBrowser;
     bool hasDiscordIntegration;
     QString versionString;
+    QString releaseName;
+    QUrl releaseUrl;
     bool usesMaterial3Theme;
     bool isDarwin;
 
@@ -81,4 +86,3 @@ private:
     QList<QRect> monitorSafeAreaResolutions;
     QList<int> monitorRefreshRates;
 };
-
