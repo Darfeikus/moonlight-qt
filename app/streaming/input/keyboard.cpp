@@ -195,14 +195,12 @@ void SdlInputHandler::handleKeyEvent(SDL_KeyboardEvent* event)
         return;
     }
 
-    // Right Alt is release-only: repeated events must not recapture input.
-    // Consume both edges so this shortcut is never forwarded to the host.
-    if (m_SpecialKeyCombos[KeyComboUngrabInput].enabled &&
+    // The optional Right Alt shortcut does not require other modifiers.
+    if ((event->state == SDL_PRESSED) &&
+            m_SpecialKeyCombos[KeyComboUngrabInput].enabled &&
             m_SpecialKeyCombos[KeyComboUngrabInput].scanCode == SDL_SCANCODE_RALT &&
             event->keysym.scancode == m_SpecialKeyCombos[KeyComboUngrabInput].scanCode) {
-        if (event->state == SDL_PRESSED && isCaptureActive()) {
-            performSpecialKeyCombo(KeyComboUngrabInput);
-        }
+        performSpecialKeyCombo(KeyComboUngrabInput);
         return;
     }
 
