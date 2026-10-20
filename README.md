@@ -159,10 +159,11 @@ Hosting for Moonlight's Debian and L4T package repositories is graciously provid
 ## Input release shortcut
 
 The default shortcut to toggle captured mouse and keyboard input is
-**Ctrl+Alt+Shift+Z**. To use a single **Right Alt** press instead, enable
+**Right Alt**. To use **Ctrl+Alt+Shift+Z** instead, uncheck
 **Settings → Input Settings → Use Right Alt to release captured input**.
-This option is off by default, applies to the next stream, and is available
+This option is on by default, applies to the next stream, and is available
 in desktop environments. When off, Right Alt is passed through to the host.
+Existing saved checkbox choices are preserved when updating.
 
 ## Fork AppImage updates
 
@@ -270,7 +271,7 @@ for different architectures, which handle building deps and extra linking for yo
 
 ## Fork shortcut
 
-On desktop environments, press **Right Alt** to release captured mouse and keyboard
+By default on desktop environments, press **Right Alt** to release captured mouse and keyboard
 input instead of **Ctrl+Alt+Shift+Z**. Left Alt continues to pass through to the host.
 
 ## Contribute
