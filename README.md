@@ -182,6 +182,8 @@ subsequent releases are installed automatically before Moonlight starts.
 For the one-time migration of an existing native executable or older AppImage,
 close Moonlight, download `appimage-update.py` from the latest release, and run
 `python3 -I appimage-update.py /path/to/the/installed/Moonlight.AppImage`.
+To bootstrap a just-published release explicitly, add `--release RELEASE_TAG`;
+this avoids waiting for GitHub's latest-release metadata to refresh.
 Pass the actual executable, not a graphics-wrapper script. Existing symlinks are
 preserved. The same verified download and rollback behavior is used.
 
@@ -197,6 +199,9 @@ other launches skip the check until they have closed. Offline checks time out
 after 3 seconds; downloads have a 30-second deadline with a 5-second socket
 timeout. Failures are logged to stderr and the installed build starts unchanged.
 Help/version commands skip update checks.
+Update checks request fresh metadata and reject a different release published
+before the running AppImage was built, preventing stale GitHub metadata from
+downgrading a newer installation.
 
 To launch without updating, including when rolling back, use:
 

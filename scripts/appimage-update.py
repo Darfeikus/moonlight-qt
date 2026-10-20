@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+from datetime import datetime
 import hashlib
 import http.client
 import json
@@ -20,6 +21,7 @@ import urllib.request
 REPOSITORY = "Darfeikus/moonlight-qt"
 LATEST_RELEASE = f"https://api.github.com/repos/{REPOSITORY}/releases/latest"
 MAX_IMAGE_SIZE = 512 * 1024 * 1024
+BUILD_TIME_PATH = Path(__file__).with_name("build-time")
 
 
 class HttpsRedirects(urllib.request.HTTPRedirectHandler):
@@ -34,9 +36,11 @@ class HttpsRedirects(urllib.request.HTTPRedirectHandler):
 
 
 def open_url(url, timeout):
+    metadata = url.startswith(f"https://api.github.com/repos/{REPOSITORY}/releases/")
     request = urllib.request.Request(url, headers={
         "User-Agent": "Moonlight-fork-AppImage-updater",
-        "Accept": "application/vnd.github+json" if url == LATEST_RELEASE else "application/octet-stream",
+        "Accept": "application/vnd.github+json" if metadata else "application/octet-stream",
+        **({"Cache-Control": "no-cache"} if metadata else {}),
     })
     return urllib.request.build_opener(HttpsRedirects()).open(request, timeout=timeout)
 
@@ -84,7 +88,21 @@ def file_digest(path):
     return digest.hexdigest()
 
 
-def update(image):
+def check_release_age(release):
+    if not BUILD_TIME_PATH.exists():
+        return
+    built_at = int(BUILD_TIME_PATH.read_text(encoding="ascii").strip())
+    published = release.get("published_at")
+    if built_at <= 0 or not isinstance(published, str):
+        raise ValueError("Missing or invalid release/build timestamp")
+    published_at = datetime.fromisoformat(published.replace("Z", "+00:00"))
+    if published_at.tzinfo is None:
+        raise ValueError("Release timestamp has no timezone")
+    if published_at.timestamp() < built_at:
+        raise ValueError("Refusing stale release metadata older than this AppImage build")
+
+
+def update(image, release_tag=None):
     image = Path(image).resolve(strict=True)
     current = image.stat()
     if not stat.S_ISREG(current.st_mode) or current.st_uid != os.getuid():
@@ -92,14 +110,20 @@ def update(image):
     with image.open("rb") as installed:
         if installed.read(4) != b"\x7fELF":
             raise ValueError("Installed target is not an ELF executable; refusing to replace a launcher script")
-    with open_url(LATEST_RELEASE, 3) as response:
+    url = (LATEST_RELEASE if release_tag is None else
+           f"https://api.github.com/repos/{REPOSITORY}/releases/tags/{urllib.parse.quote(release_tag, safe='')}")
+    with open_url(url, 3) as response:
         metadata = response.read(1024 * 1024 + 1)
     if len(metadata) > 1024 * 1024:
         raise ValueError("Release metadata is too large")
-    asset = release_asset(json.loads(metadata))
+    release = json.loads(metadata)
+    asset = release_asset(release)
+    if release_tag is not None and release.get("tag_name") != release_tag:
+        raise ValueError("Release metadata does not match the requested tag")
     expected_digest = asset["digest"].removeprefix("sha256:")
     if file_digest(image) == expected_digest:
         return False
+    check_release_age(release)
 
     download = None
     backup = None
@@ -155,10 +179,11 @@ def update(image):
 def main():
     parser = argparse.ArgumentParser(description="Update an existing Moonlight executable from the fork's latest stable release")
     parser.add_argument("--restart-code", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--release", help="Install this exact stable release tag instead of latest")
     parser.add_argument("appimage")
     args = parser.parse_args()
     try:
-        changed = update(args.appimage)
+        changed = update(args.appimage, args.release)
         return 10 if changed and args.restart_code else 0
     except (OSError, ValueError, urllib.error.URLError, http.client.HTTPException) as error:
         print(f"Moonlight updater: {error}; starting the installed build", file=sys.stderr)

@@ -56,6 +56,10 @@ class UpdaterTests(unittest.TestCase):
         self.arch = patch.object(updater.platform, "machine", return_value="x86_64")
         self.arch.start()
         self.addCleanup(self.arch.stop)
+        self.build_time = self.image.parent / "build-time"
+        self.timestamp_path = patch.object(updater, "BUILD_TIME_PATH", self.build_time)
+        self.timestamp_path.start()
+        self.addCleanup(self.timestamp_path.stop)
 
     def apply(self, data=None, metadata=None):
         data = self.new if data is None else data
@@ -187,6 +191,53 @@ class UpdaterTests(unittest.TestCase):
             with patch.object(sys, "argv", ["updater", *flags, str(self.image)]):
                 with patch.object(updater, "update", return_value=True):
                     self.assertEqual(updater.main(), expected)
+
+    def test_stale_latest_metadata_cannot_downgrade_a_newer_build(self):
+        self.build_time.write_text("200")
+        metadata = release(self.new)
+        metadata["published_at"] = "1970-01-01T00:01:40Z"
+        with self.assertRaisesRegex(ValueError, "stale release metadata"):
+            self.apply(metadata=metadata)
+        self.assertEqual(self.image.read_bytes(), self.old)
+        self.assertFalse(self.image.with_name("Moonlight.AppImage.previous").exists())
+
+    def test_release_published_after_build_is_accepted(self):
+        self.build_time.write_text("100")
+        metadata = release(self.new)
+        metadata["published_at"] = "1970-01-01T00:03:20Z"
+        changed, _ = self.apply(metadata=metadata)
+        self.assertTrue(changed)
+        self.assertEqual(self.image.read_bytes(), self.new)
+
+    def test_unchanged_image_does_not_require_publication_timestamp(self):
+        self.build_time.write_text("200")
+        changed, request = self.apply(self.old)
+        self.assertFalse(changed)
+        self.assertEqual(request.call_count, 1)
+
+    def test_exact_release_uses_tag_endpoint_and_checks_tag(self):
+        metadata = release(self.new)
+        metadata["tag_name"] = "fork-test"
+        with patch.object(updater, "open_url", side_effect=[
+            io.BytesIO(json.dumps(metadata).encode()), io.BytesIO(self.new),
+        ]) as request:
+            self.assertTrue(updater.update(self.image, "fork-test"))
+        self.assertEqual(request.call_args_list[0].args[0],
+                         "https://api.github.com/repos/Darfeikus/moonlight-qt/releases/tags/fork-test")
+
+    def test_wrong_exact_release_is_rejected(self):
+        metadata = release(self.new)
+        metadata["tag_name"] = "wrong-tag"
+        with patch.object(updater, "open_url", return_value=io.BytesIO(json.dumps(metadata).encode())):
+            with self.assertRaisesRegex(ValueError, "requested tag"):
+                updater.update(self.image, "fork-test")
+        self.assert_unchanged()
+
+    def test_metadata_requests_revalidate_cache(self):
+        with patch.object(updater.urllib.request, "build_opener") as opener:
+            updater.open_url(updater.LATEST_RELEASE, 3)
+        request = opener.return_value.open.call_args.args[0]
+        self.assertEqual(request.get_header("Cache-control"), "no-cache")
 
 
 class AppRunTests(unittest.TestCase):

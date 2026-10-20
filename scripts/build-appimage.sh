@@ -98,6 +98,7 @@ cp "$SOURCE_ROOT/app/deploy/linux/AppRun" "$APP_RUN" || fail "Unable to stage Ap
 chmod +x $APP_RUN
 mkdir -p "$DEPLOY_FOLDER/opt/moonlight"
 cp "$SOURCE_ROOT/scripts/appimage-update.py" "$DEPLOY_FOLDER/opt/moonlight/" || fail "Unable to stage AppImage updater!"
+date -u +%s > "$DEPLOY_FOLDER/opt/moonlight/build-time" || fail "Unable to record AppImage build timestamp!"
 
 echo Deploying libraries and Qt plugins
 pushd $INSTALLER_FOLDER
