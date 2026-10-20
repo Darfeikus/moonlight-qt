@@ -94,6 +94,15 @@ fi
 APP_RUN=$BUILD_ROOT/AppRun-libva
 cp "$SOURCE_ROOT/app/deploy/linux/AppRun" "$APP_RUN" || fail "Unable to stage AppRun!"
 chmod +x $APP_RUN
+mkdir -p "$DEPLOY_FOLDER/opt/moonlight"
+cp "$SOURCE_ROOT/scripts/appimage-update.py" "$DEPLOY_FOLDER/opt/moonlight/" || fail "Unable to stage AppImage updater!"
+UPDATE_RELEASE_NAME="${MOONLIGHT_RELEASE_NAME:-}"
+if [ -z "$UPDATE_RELEASE_NAME" ] && [ "${GITHUB_REF_TYPE:-}" = tag ]; then
+  UPDATE_RELEASE_NAME="${GITHUB_REF_NAME:-}"
+fi
+if [[ "$UPDATE_RELEASE_NAME" =~ ^fork-[0-9]{4}\.[0-9]{2}\.[0-9]{2}(\.[0-9]+)?$ ]]; then
+  printf '%s\n' "$UPDATE_RELEASE_NAME" > "$DEPLOY_FOLDER/opt/moonlight/release-version"
+fi
 echo Creating AppImage
 pushd $INSTALLER_FOLDER
 # Don't bundle libva: the bundled build-environment version (jammy: VA-API 1.20/1.22)

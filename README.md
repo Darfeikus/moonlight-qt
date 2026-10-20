@@ -165,7 +165,7 @@ This option is on by default, applies to the next stream, and is available
 in desktop environments. When off, Right Alt is passed through to the host.
 Existing saved checkbox choices are preserved when updating.
 
-## Fork builds and manual updates
+## Fork builds and automatic updates
 
 The small badge at the top-left of the application toolbar identifies the running
 release, including while offline. Click it to open that release's GitHub page.
@@ -175,20 +175,37 @@ and local builds show `Development (VERSION)`. To supply a custom build label,
 export `MOONLIGHT_RELEASE_NAME` before configuring and building the project.
 Non-tag builds link to the fork's releases page instead.
 
-Fork builds no longer download or replace themselves at startup. Updates are
-manual: choose a source commit or a build from
-[`Darfeikus/moonlight-qt`](https://github.com/Darfeikus/moonlight-qt/releases),
-close Moonlight before replacing its executable, and keep a known-working backup.
-Existing graphics-wrapper scripts and their renderer/decoder overrides should
-be preserved.
+Fork AppImages check the latest stable
+[`Darfeikus/moonlight-qt`](https://github.com/Darfeikus/moonlight-qt/releases)
+release before starting. Updates require the GitHub asset's SHA-256 digest,
+matching size and AppImage architecture, and a successful `--version` startup
+probe in the existing graphical environment. Only release tags at or above
+`fork-2026.10.20` are accepted, preventing updates back to pre-SDL-fix builds.
+Tagged builds also reject older tags and changed assets republished under the
+same tag. Publish immutable `fork-YYYY.MM.DD[.N]` tags in increasing order.
 
-Previously published AppImages still contain the old startup updater. Until
-replacing them, disable it on every launch by setting this environment variable
-in the launcher:
+The updater atomically replaces only the AppImage, preserves its permissions
+and external graphics wrappers, and keeps the previous image at
+`APPIMAGE.previous`. A shared lock prevents replacement while an instance is
+running. Metadata/download/probe failures are logged to stderr and launch the
+installed build instead. Checks use the host's `python3` and `flock`; missing
+tools or an unwritable install directory are reported without preventing launch.
+Help/version requests and extracted AppDirs do not check for updates.
+
+To disable updates (including when testing or rolling back), set:
 
 ```sh
 MOONLIGHT_DISABLE_UPDATES=1 /path/to/Moonlight.AppImage
 ```
+
+For rollback, close Moonlight, copy `APPIMAGE.previous` over the AppImage, and
+keep updates disabled until a corrected release is published. The startup probe
+detects loader/startup failures, not every possible streaming or GPU regression;
+release builds still require end-to-end validation before publication.
+For an explicit bootstrap from an older image, the release also provides
+`appimage-update.py`: run `python3 -I appimage-update.py --release TAG /path/to/AppImage`
+in the graphical session, with Moonlight closed. It never replaces a native ELF
+binary or a shell launcher. Native deployments are not automatically updated.
 
 Native Linux binaries depend on the target system's Qt, SDL and FFmpeg versions.
 Use the same source commit across clients, but build against a compatible runtime
@@ -204,7 +221,7 @@ capture then triggers more reconciliation and creates a toggle loop. The patch
 combines the physical state of all aliases before comparing it with SDL's state;
 it does not change the shortcut, add a cooldown, or restrict it to release only.
 Removing automatic updates or compiling Moonlight alone does not fix an affected
-system SDL. Previously published AppImages do not contain this patch.
+system SDL. Releases older than `fork-2026.10.20` do not contain this patch.
 
 For native X11 deployments, build patched SDL 3.4.18 and sdl2-compat 2.32.74
 against the target runtime, installing them to a private prefix rather than

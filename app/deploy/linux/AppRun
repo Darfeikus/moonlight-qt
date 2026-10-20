@@ -2,6 +2,53 @@
 
 APPDIR="${APPDIR:-$(dirname "$(readlink -f "$0")")}"
 
+update_appimage()
+{
+    [ -n "${APPIMAGE:-}" ] || return 0
+    [ "${MOONLIGHT_DISABLE_UPDATES:-0}" != 1 ] || return 0
+    case "${1:-}" in --help|-h|--version|-v) return 0 ;; esac
+    if ! command -v python3 >/dev/null || ! command -v flock >/dev/null; then
+        echo "Moonlight updater: python3 and flock are required; starting the installed build" >&2
+        return
+    fi
+    if ! image=$(readlink -f "$APPIMAGE"); then
+        echo "Moonlight updater: cannot resolve AppImage path; starting the installed build" >&2
+        return
+    fi
+
+    # Retain the inherited lock across replacement/re-exec, then share it for
+    # the application's lifetime so another launch cannot replace a running image.
+    if [ "${MOONLIGHT_APPIMAGE_UPDATED:-}" = "$image" ] && { : >&9; } 2>/dev/null; then
+        flock -s 9 || return 1
+        return
+    fi
+    if ! { exec 9>"$image.update.lock"; }; then
+        echo "Moonlight updater: cannot open update lock; starting the installed build" >&2
+        return
+    fi
+    if flock -n -x 9; then
+        env -u LD_LIBRARY_PATH -u LD_PRELOAD -u PYTHONHOME -u PYTHONPATH \
+            python3 -I "$APPDIR/opt/moonlight/appimage-update.py" --restart-code "$image"
+        status=$?
+        if [ "$status" -eq 10 ]; then
+            export MOONLIGHT_APPIMAGE_UPDATED="$image"
+            unset APPDIR APPIMAGE ARGV0 OWD
+            exec "$image" "$@"
+            echo "Moonlight updater: cannot restart the updated AppImage" >&2
+            return 1
+        elif [ "$status" -ne 0 ]; then
+            echo "Moonlight updater: update check failed; starting the installed build" >&2
+        fi
+    fi
+    if ! flock -w 50 -s 9; then
+        echo "Moonlight updater: cannot acquire the running-instance lock" >&2
+        return 1
+    fi
+}
+
+update_appimage "$@" || exit 1
+unset MOONLIGHT_APPIMAGE_UPDATED
+
 # Prefer host libva for compatibility with its VA-API drivers. Only expose the
 # bundled fallback when the host cannot satisfy our ELF symbol requirements.
 LIBVA_FALLBACK="$APPDIR/opt/libva-fallback"
