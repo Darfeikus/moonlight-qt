@@ -158,6 +158,14 @@ Hosting for Moonlight's Debian and L4T package repositories is graciously provid
 
 ## Building
 
+### Input release shortcut
+
+The default shortcut to toggle captured mouse and keyboard input is
+**Ctrl+Alt+Shift+Z**. To use a single **Right Alt** press instead, enable
+**Settings → Input Settings → Use Right Alt to release captured input**.
+This option is off by default, applies to the next stream, and is available
+in desktop environments. When off, Right Alt is passed through to the host.
+
 ### Windows Build Requirements
 * Qt 6.11 SDK or later (earlier versions may work but are not officially supported)
 * [Visual Studio 2026](https://visualstudio.microsoft.com/downloads/) (Community edition is fine)

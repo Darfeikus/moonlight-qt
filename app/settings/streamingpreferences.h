@@ -159,6 +159,7 @@ public:
     Q_PROPERTY(bool swapFaceButtons MEMBER swapFaceButtons NOTIFY swapFaceButtonsChanged)
     Q_PROPERTY(bool keepAwake MEMBER keepAwake NOTIFY keepAwakeChanged)
     Q_PROPERTY(CaptureSysKeysMode captureSysKeysMode MEMBER captureSysKeysMode NOTIFY captureSysKeysModeChanged)
+    Q_PROPERTY(bool rightAltToReleaseInput MEMBER rightAltToReleaseInput NOTIFY rightAltToReleaseInputChanged)
     Q_PROPERTY(Language language MEMBER language NOTIFY languageChanged);
     Q_PROPERTY(QStringList usbipDevices MEMBER usbipDevices NOTIFY usbipDevicesChanged)
 
@@ -203,6 +204,7 @@ public:
     UIDisplayMode uiDisplayMode;
     Language language;
     CaptureSysKeysMode captureSysKeysMode;
+    bool rightAltToReleaseInput;
     RendererSelection rendererSelection;
 
     // USB devices ("vendor:product", lowercase hex) forwarded to the streaming PC
@@ -243,6 +245,7 @@ signals:
     void reverseScrollDirectionChanged();
     void swapFaceButtonsChanged();
     void captureSysKeysModeChanged();
+    void rightAltToReleaseInputChanged();
     void keepAwakeChanged();
     void languageChanged();
     void rendererSelectionChanged();
@@ -255,4 +258,3 @@ private:
 
     QQmlEngine* m_QmlEngine;
 };
-
