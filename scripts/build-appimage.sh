@@ -13,6 +13,7 @@ DEPLOY_FOLDER=$BUILD_ROOT/deploy-$BUILD_CONFIG
 INSTALLER_FOLDER=$BUILD_ROOT/installer-$BUILD_CONFIG
 
 LINUXDEPLOY=linuxdeploy-$(uname -m).AppImage
+QT_PLUGIN=linuxdeploy-plugin-qt-$(uname -m).AppImage
 
 if [ -n "$CI_VERSION" ]; then
   VERSION=$CI_VERSION
@@ -22,6 +23,7 @@ fi
 
 command -v qmake6 >/dev/null 2>&1 || fail "Unable to find 'qmake6' in your PATH!"
 command -v $LINUXDEPLOY >/dev/null 2>&1 || fail "Unable to find '$LINUXDEPLOY' in your PATH!"
+command -v $QT_PLUGIN >/dev/null 2>&1 || fail "Unable to find '$QT_PLUGIN' in your PATH!"
 
 echo Cleaning output directories
 rm -rf $BUILD_FOLDER
@@ -97,7 +99,7 @@ chmod +x $APP_RUN
 mkdir -p "$DEPLOY_FOLDER/opt/moonlight"
 cp "$SOURCE_ROOT/scripts/appimage-update.py" "$DEPLOY_FOLDER/opt/moonlight/" || fail "Unable to stage AppImage updater!"
 
-echo Creating AppImage
+echo Deploying libraries and Qt plugins
 pushd $INSTALLER_FOLDER
 # Don't bundle libva: the bundled build-environment version (jammy: VA-API 1.20/1.22)
 # cannot dlopen GPU drivers compiled against newer libva on the host (which export
@@ -105,20 +107,24 @@ pushd $INSTALLER_FOLDER
 # software decoding. The host always provides libva on systems where VA-API is
 # usable, so link against it at runtime instead (the AppRun shim above keeps a
 # bundled last-resort copy for hosts without libva).
-VERSION=$VERSION $LINUXDEPLOY --appdir $DEPLOY_FOLDER \
+EXCLUDED_LIBRARIES=(
+  "--exclude-library=libva.so*"
+  "--exclude-library=libva-drm.so*"
+  "--exclude-library=libva-wayland.so*"
+  "--exclude-library=libva-x11.so*"
+  "--exclude-library=libwayland-client.so*"
+  "--exclude-library=libwayland-server.so*"
+  "--exclude-library=libwayland-egl.so*"
+  "--exclude-library=libwayland-cursor.so*"
+)
+$LINUXDEPLOY --appdir $DEPLOY_FOLDER \
   --library=/usr/local/lib/libSDL3.so.0 \
-  --plugin qt \
   --custom-apprun $APP_RUN \
-  --exclude-library=libva.so* \
-  --exclude-library=libva-drm.so* \
-  --exclude-library=libva-wayland.so* \
-  --exclude-library=libva-x11.so* \
-  --exclude-library=libwayland-client.so* \
-  --exclude-library=libwayland-server.so* \
-  --exclude-library=libwayland-egl.so* \
-  --exclude-library=libwayland-cursor.so* \
-  --output appimage || fail "linuxdeploy failed!"
-popd
+  "${EXCLUDED_LIBRARIES[@]}" || fail "linuxdeploy failed!"
+
+# linuxdeploy does not forward exclusions to input plugins, so invoke Qt's
+# supported standalone mode with the same host-library exclusions.
+$QT_PLUGIN --appdir $DEPLOY_FOLDER "${EXCLUDED_LIBRARIES[@]}" || fail "Qt deployment failed!"
 
 for plugin in platforms/libqwayland-egl.so \
               platforms/libqwayland-generic.so \
@@ -128,5 +134,12 @@ done
 if [ -n "$(find "$DEPLOY_FOLDER/usr" -name 'libwayland-client.so*' -print -quit)" ]; then
   fail "Host libwayland-client must not be bundled with the host EGL implementation!"
 fi
+
+echo Creating AppImage
+VERSION=$VERSION $LINUXDEPLOY --appdir $DEPLOY_FOLDER \
+  --custom-apprun $APP_RUN \
+  "${EXCLUDED_LIBRARIES[@]}" \
+  --output appimage || fail "AppImage creation failed!"
+popd
 
 echo Build successful
