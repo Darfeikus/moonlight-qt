@@ -1443,7 +1443,7 @@ Flickable {
                     ToolTip.delay: 1000
                     ToolTip.timeout: 10000
                     ToolTip.visible: hovered
-                    ToolTip.text: qsTr("Replace Ctrl+Alt+Shift+Z with Right Alt to toggle mouse and keyboard capture. When unchecked, Right Alt is sent to the host normally. Applies to the next stream.")
+                    ToolTip.text: qsTr("Use Right Alt to release mouse and keyboard capture. Click inside the stream to capture again. When unchecked, Ctrl+Alt+Shift+Z toggles capture and Right Alt is sent to the host normally. Applies to the next stream.")
                 }
 
                 CheckBox {

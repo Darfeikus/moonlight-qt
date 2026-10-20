@@ -158,8 +158,10 @@ Hosting for Moonlight's Debian and L4T package repositories is graciously provid
 
 ## Input release shortcut
 
-The default shortcut to toggle captured mouse and keyboard input is
-**Right Alt**. To use **Ctrl+Alt+Shift+Z** instead, uncheck
+The default shortcut to release captured mouse and keyboard input is
+**Right Alt**. It only releases input; further presses cannot capture it again.
+Click inside the stream to recapture. To use **Ctrl+Alt+Shift+Z** to toggle
+capture instead, uncheck
 **Settings → Input Settings → Use Right Alt to release captured input**.
 This option is on by default, applies to the next stream, and is available
 in desktop environments. When off, Right Alt is passed through to the host.
