@@ -282,6 +282,26 @@ ApplicationWindow {
                 Layout.maximumWidth: Math.min(200, toolBar.width / 4)
                 Layout.alignment: Qt.AlignVCenter
 
+                Accessible.role: SystemProperties.hasBrowser ? Accessible.Link : Accessible.StaticText
+                Accessible.name: text
+                Accessible.onPressAction: {
+                    if (SystemProperties.hasBrowser) {
+                        Qt.openUrlExternally(SystemProperties.releaseUrl)
+                    }
+                }
+
+                MouseArea {
+                    objectName: "releaseBadgeLink"
+                    anchors.fill: parent
+                    enabled: SystemProperties.hasBrowser
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: Qt.openUrlExternally(SystemProperties.releaseUrl)
+
+                    ToolTip.visible: containsMouse && enabled
+                    ToolTip.text: qsTr("View this release on GitHub")
+                }
+
                 background: Rectangle {
                     radius: 4
                     color: Qt.rgba(1, 1, 1, 0.1)

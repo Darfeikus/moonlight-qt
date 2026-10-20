@@ -588,9 +588,9 @@ macx {
 VERSION = "$$cat(version.txt)"
 DEFINES += VERSION_STR=\\\"$$cat(version.txt)\\\"
 
+CI_REF_TYPE = $$(GITHUB_REF_TYPE)
 FORK_RELEASE_NAME = $$(MOONLIGHT_RELEASE_NAME)
 isEmpty(FORK_RELEASE_NAME) {
-    CI_REF_TYPE = $$(GITHUB_REF_TYPE)
     CI_BUILD_VERSION = $$(CI_VERSION)
     equals(CI_REF_TYPE, tag) {
         FORK_RELEASE_NAME = $$(GITHUB_REF_NAME)
@@ -603,4 +603,11 @@ isEmpty(FORK_RELEASE_NAME) {
         error("Release names must contain only letters, digits, dots, underscores or hyphens")
     }
     DEFINES += FORK_RELEASE_NAME=\\\"$$FORK_RELEASE_NAME\\\"
+}
+equals(CI_REF_TYPE, tag) {
+    FORK_RELEASE_TAG = $$(GITHUB_REF_NAME)
+    !contains(FORK_RELEASE_TAG, "^[A-Za-z0-9._-]+$") {
+        error("Release tags must contain only letters, digits, dots, underscores or hyphens")
+    }
+    DEFINES += FORK_RELEASE_TAG=\\\"$$FORK_RELEASE_TAG\\\"
 }

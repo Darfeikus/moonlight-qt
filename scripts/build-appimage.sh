@@ -13,7 +13,6 @@ DEPLOY_FOLDER=$BUILD_ROOT/deploy-$BUILD_CONFIG
 INSTALLER_FOLDER=$BUILD_ROOT/installer-$BUILD_CONFIG
 
 LINUXDEPLOY=linuxdeploy-$(uname -m).AppImage
-QT_PLUGIN=linuxdeploy-plugin-qt-$(uname -m).AppImage
 
 if [ -n "$CI_VERSION" ]; then
   VERSION=$CI_VERSION
@@ -23,7 +22,6 @@ fi
 
 command -v qmake6 >/dev/null 2>&1 || fail "Unable to find 'qmake6' in your PATH!"
 command -v $LINUXDEPLOY >/dev/null 2>&1 || fail "Unable to find '$LINUXDEPLOY' in your PATH!"
-command -v $QT_PLUGIN >/dev/null 2>&1 || fail "Unable to find '$QT_PLUGIN' in your PATH!"
 
 echo Cleaning output directories
 rm -rf $BUILD_FOLDER
@@ -41,9 +39,11 @@ export LDFLAGS=-flto=auto
 
 echo Configuring the project
 pushd $BUILD_FOLDER
-# Keep Moonlight's optional native Wayland integration disabled. Qt's Wayland
-# platform plugins are bundled separately below, using the host Wayland libraries
-# to stay compatible with the host EGL implementation.
+# Building with Wayland support will cause linuxdeploy to include libwayland-client.so in the AppImage.
+# Since we always use the host implementation of EGL, this can cause libEGL_mesa.so to fail to load due
+# to missing symbols from the host's version of libwayland-client.so that aren't present in the older
+# version of libwayland-client.so from our AppImage build environment. When this happens, EGL fails to
+# work even in X11. To avoid this, we will disable Wayland support for the AppImage.
 #
 # We disable DRM support because linuxdeploy doesn't bundle the appropriate libraries for Qt EGLFS.
 qmake6 $SOURCE_ROOT/moonlight-qt.pro CONFIG+=disable-wayland CONFIG+=disable-libdrm PREFIX=$DEPLOY_FOLDER/usr DEFINES+=APP_IMAGE || fail "Qmake failed!"
@@ -61,8 +61,6 @@ popd
 
 export QML_SOURCES_PATHS=$SOURCE_ROOT/app/gui
 export QMAKE=qmake6
-export EXTRA_PLATFORM_PLUGINS="libqwayland-egl.so;libqwayland-generic.so"
-export EXTRA_QT_MODULES=waylandcompositor
 
 # Stage the build-environment libva in opt/libva-fallback (outside usr/, so linuxdeploy
 # does not scan it, and outside every loader search path), together with a small probe
@@ -100,7 +98,7 @@ mkdir -p "$DEPLOY_FOLDER/opt/moonlight"
 cp "$SOURCE_ROOT/scripts/appimage-update.py" "$DEPLOY_FOLDER/opt/moonlight/" || fail "Unable to stage AppImage updater!"
 date -u +%s > "$DEPLOY_FOLDER/opt/moonlight/build-time" || fail "Unable to record AppImage build timestamp!"
 
-echo Deploying libraries and Qt plugins
+echo Creating AppImage
 pushd $INSTALLER_FOLDER
 # Don't bundle libva: the bundled build-environment version (jammy: VA-API 1.20/1.22)
 # cannot dlopen GPU drivers compiled against newer libva on the host (which export
@@ -108,39 +106,15 @@ pushd $INSTALLER_FOLDER
 # software decoding. The host always provides libva on systems where VA-API is
 # usable, so link against it at runtime instead (the AppRun shim above keeps a
 # bundled last-resort copy for hosts without libva).
-EXCLUDED_LIBRARIES=(
-  "--exclude-library=libva.so*"
-  "--exclude-library=libva-drm.so*"
-  "--exclude-library=libva-wayland.so*"
-  "--exclude-library=libva-x11.so*"
-  "--exclude-library=libwayland-client.so*"
-  "--exclude-library=libwayland-server.so*"
-  "--exclude-library=libwayland-egl.so*"
-  "--exclude-library=libwayland-cursor.so*"
-)
-$LINUXDEPLOY --appdir $DEPLOY_FOLDER \
-  --library=/usr/local/lib/libSDL3.so.0 \
-  --custom-apprun $APP_RUN \
-  "${EXCLUDED_LIBRARIES[@]}" || fail "linuxdeploy failed!"
-
-# linuxdeploy does not forward exclusions to input plugins, so invoke Qt's
-# supported standalone mode with the same host-library exclusions.
-$QT_PLUGIN --appdir $DEPLOY_FOLDER "${EXCLUDED_LIBRARIES[@]}" || fail "Qt deployment failed!"
-
-for plugin in platforms/libqwayland-egl.so \
-              platforms/libqwayland-generic.so \
-              wayland-graphics-integration-client/libqt-plugin-wayland-egl.so; do
-  [ -f "$DEPLOY_FOLDER/usr/plugins/$plugin" ] || fail "Missing Wayland plugin: $plugin"
-done
-if [ -n "$(find "$DEPLOY_FOLDER/usr" -name 'libwayland-client.so*' -print -quit)" ]; then
-  fail "Host libwayland-client must not be bundled with the host EGL implementation!"
-fi
-
-echo Creating AppImage
 VERSION=$VERSION $LINUXDEPLOY --appdir $DEPLOY_FOLDER \
+  --library=/usr/local/lib/libSDL3.so.0 \
+  --plugin qt \
   --custom-apprun $APP_RUN \
-  "${EXCLUDED_LIBRARIES[@]}" \
-  --output appimage || fail "AppImage creation failed!"
+  --exclude-library=libva.so* \
+  --exclude-library=libva-drm.so* \
+  --exclude-library=libva-wayland.so* \
+  --exclude-library=libva-x11.so* \
+  --output appimage || fail "linuxdeploy failed!"
 popd
 
 echo Build successful

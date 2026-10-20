@@ -168,10 +168,12 @@ Existing saved checkbox choices are preserved when updating.
 ## Fork AppImage updates
 
 The small badge at the top-left of the application toolbar identifies the running
-release, including while offline. It is part of the client UI, not the streamed
-desktop. Tagged CI builds embed the Git tag; other CI builds show `build-COMMIT`,
+release, including while offline. Click it to open that release's GitHub page.
+It is part of the client UI, not the streamed desktop.
+Tagged CI builds embed the Git tag; other CI builds show `build-COMMIT`,
 and local builds show `Development (VERSION)`. To supply a custom build label,
 export `MOONLIGHT_RELEASE_NAME` before configuring and building the project.
+Non-tag builds link to the fork's releases page instead.
 
 This fork's x86_64 AppImages check the latest **stable** release in
 [`Darfeikus/moonlight-qt`](https://github.com/Darfeikus/moonlight-qt/releases)
@@ -215,9 +217,15 @@ matches the release tag, and include
 `scripts/appimage-update.py` as `appimage-update.py` for first-time migrations.
 Drafts, prereleases and Actions artifacts alone are not offered to clients.
 
-The AppImage includes both XCB and Wayland Qt platform plugins and preserves
-`QT_QPA_PLATFORM` and renderer/decoder overrides supplied by launcher wrappers.
-It uses the host's Wayland libraries, EGL implementation and VA-API drivers.
+To withdraw a faulty release, mark it as a draft and mark a known-working stable
+release as latest. This also withdraws its public asset downloads, rather than
+relying only on refreshed latest-release metadata. Cancelling or deleting an
+Actions run does not withdraw assets already published to a GitHub Release.
+
+The AppImage retains its original XCB-only Qt platform packaging. Do not add
+Wayland Qt plugins or special Qt deployment stages to it. Launcher-provided
+renderer/decoder overrides are preserved, but a launcher forcing
+`QT_QPA_PLATFORM=wayland` requires a separate Wayland-capable native build.
 
 ## Building
 
