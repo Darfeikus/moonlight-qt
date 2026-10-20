@@ -32,11 +32,14 @@ jobs:
             qml6-module-qtqml-workerscript qml6-module-qtquick-window qml6-module-qtquick python3-pip nasm libgbm-dev libdrm-dev libfreetype-dev libasound2-dev \
             libdbus-1-dev libegl1-mesa-dev libgl1-mesa-dev libgles2-mesa-dev libglu1-mesa-dev libibus-1.0-dev libpulse-dev libudev-dev libx11-dev libxcursor-dev \
             libxext-dev libxi-dev libxinerama-dev libxkbcommon-dev libxrandr-dev libxss-dev libxt-dev libxv-dev libxxf86vm-dev libxcb-dri3-dev libx11-xcb-dev \
-            libxfixes-dev libxtst-dev wayland-protocols libopus-dev libvdpau-dev libgl-dev libpipewire-0.3-dev liburing-dev vulkan-sdk cmake
+            libxfixes-dev libxtst-dev wayland-protocols libopus-dev libvdpau-dev libgl-dev libpipewire-0.3-dev liburing-dev vulkan-sdk cmake xvfb xauth
           sudo pip3 install meson
           mkdir -p dep_root/{bin,include,lib}
           echo "DEP_ROOT=$PWD/dep_root" >> "${GITHUB_ENV}"
           echo "$PWD/dep_root/bin" >> "${GITHUB_PATH}"
+
+      - name: Test Linux launchers and USB/IP helpers
+        run: python3 -m unittest discover -s scripts/tests -p 'test_*.py'
 
       - name: Checkout SDL3
         uses: actions/checkout@v5
@@ -48,6 +51,7 @@ jobs:
       - name: Build SDL3
         working-directory: deps/SDL
         run: |
+          git apply ../../app/deploy/linux/sdl3/*.patch
           cmake -DSDL_KMSDRM=OFF -DSDL_TEST_LIBRARY=OFF -DSDL_INSTALL_DOCS=OFF -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON -S . -B build
           cmake --build build -j
           sudo cmake --install build
@@ -65,6 +69,22 @@ jobs:
           cmake -DSDL2COMPAT_TESTS=OFF -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON -S . -B build
           cmake --build build -j
           sudo cmake --install build
+          # Jammy's pkg-config cannot resolve the new metadata's Provides: sdl2.
+          sudo ln -s sdl2-compat.pc /usr/local/lib/pkgconfig/sdl2.pc
+
+      - name: Test X11 modifier capture
+        env:
+          LD_LIBRARY_PATH: /usr/local/lib
+          SDL_VIDEODRIVER: x11
+        run: |
+          c++ -std=c++11 -Wall -Wextra -Werror -pthread \
+            scripts/tests/check_x11_alt_feedback.cpp \
+            $(/usr/local/bin/sdl2-config --cflags --libs) -lX11 -lXtst \
+            -o "${RUNNER_TEMP}/check-x11-alt-feedback"
+          for options in '' '--hold' '--level3' '--level3 --hold' '--refocus' '--passthrough'; do
+            xvfb-run -a "${RUNNER_TEMP}/check-x11-alt-feedback" $options
+            SDL_X11_XINPUT2=0 xvfb-run -a "${RUNNER_TEMP}/check-x11-alt-feedback" $options
+          done
 
       - name: Checkout SDL_ttf
         uses: actions/checkout@v5

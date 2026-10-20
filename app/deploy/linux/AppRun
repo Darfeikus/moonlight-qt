@@ -2,50 +2,6 @@
 
 APPDIR="${APPDIR:-$(dirname "$(readlink -f "$0")")}"
 
-update_appimage()
-{
-    [ -n "${APPIMAGE:-}" ] || return
-    [ "${MOONLIGHT_DISABLE_UPDATES:-0}" != 1 ] || return
-    case "${1:-}" in --help|-h|--version|-v) return ;; esac
-    if ! image=$(readlink -f "$APPIMAGE"); then
-        echo "Moonlight updater: cannot resolve AppImage path; starting the installed build" >&2
-        return
-    fi
-    APPIMAGE="$image"
-
-    if ! command -v python3 >/dev/null || ! command -v flock >/dev/null; then
-        echo "Moonlight updater: python3 and flock are required; starting the installed build" >&2
-        return
-    fi
-    if ! { exec 9>"$APPIMAGE.update.lock"; }; then
-        echo "Moonlight updater: cannot open update lock; starting the installed build" >&2
-        return
-    fi
-
-    # Keep a shared lock for the lifetime of Moonlight, so other launches cannot
-    # update this AppImage while an instance is running.
-    if [ "${MOONLIGHT_APPIMAGE_UPDATED:-0}" != 1 ] && flock -n -x 9; then
-        python3 -I "$APPDIR/opt/moonlight/appimage-update.py" --restart-code "$APPIMAGE"
-        status=$?
-        if [ "$status" -eq 10 ]; then
-            image="$APPIMAGE"
-            export MOONLIGHT_APPIMAGE_UPDATED=1
-            flock -u 9
-            exec 9>&-
-            unset APPDIR APPIMAGE ARGV0
-            exec "$image" "$@"
-        elif [ "$status" -ne 0 ]; then
-            echo "Moonlight updater: update check failed; keeping the installed build" >&2
-        fi
-    fi
-    if ! flock -s 9; then
-        echo "Moonlight updater: cannot hold the running-instance lock" >&2
-    fi
-}
-
-update_appimage "$@"
-unset MOONLIGHT_APPIMAGE_UPDATED
-
 # Prefer host libva for compatibility with its VA-API drivers. Only expose the
 # bundled fallback when the host cannot satisfy our ELF symbol requirements.
 LIBVA_FALLBACK="$APPDIR/opt/libva-fallback"

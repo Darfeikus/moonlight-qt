@@ -165,7 +165,7 @@ This option is on by default, applies to the next stream, and is available
 in desktop environments. When off, Right Alt is passed through to the host.
 Existing saved checkbox choices are preserved when updating.
 
-## Fork AppImage updates
+## Fork builds and manual updates
 
 The small badge at the top-left of the application toolbar identifies the running
 release, including while offline. Click it to open that release's GitHub page.
@@ -175,57 +175,91 @@ and local builds show `Development (VERSION)`. To supply a custom build label,
 export `MOONLIGHT_RELEASE_NAME` before configuring and building the project.
 Non-tag builds link to the fork's releases page instead.
 
-This fork's x86_64 AppImages check the latest **stable** release in
-[`Darfeikus/moonlight-qt`](https://github.com/Darfeikus/moonlight-qt/releases)
-when launched. Existing Steam shortcuts, desktop launchers and graphics wrappers
-continue to work. Install an update-capable AppImage once on each client;
-subsequent releases are installed automatically before Moonlight starts.
+Fork builds no longer download or replace themselves at startup. Updates are
+manual: choose a source commit or a build from
+[`Darfeikus/moonlight-qt`](https://github.com/Darfeikus/moonlight-qt/releases),
+close Moonlight before replacing its executable, and keep a known-working backup.
+Existing graphics-wrapper scripts and their renderer/decoder overrides should
+be preserved.
 
-For the one-time migration of an existing native executable or older AppImage,
-close Moonlight, download `appimage-update.py` from the latest release, and run
-`python3 -I appimage-update.py /path/to/the/installed/Moonlight.AppImage`.
-To bootstrap a just-published release explicitly, add `--release RELEASE_TAG`;
-this avoids waiting for GitHub's latest-release metadata to refresh.
-Pass the actual executable, not a graphics-wrapper script. Existing symlinks are
-preserved. The same verified download and rollback behavior is used.
-
-The client needs Python 3.10+ and `flock`. No GitHub login, root access, service or
-scheduled task is needed. The AppImage and its directory must be writable by its
-owner. Launching an extracted AppDir does not update it.
-
-Downloads use HTTPS and must match GitHub's asset SHA-256 digest, size and
-x86_64 AppImage header before they replace the installed file atomically. The
-previous file is kept alongside it as `Moonlight.AppImage.previous` (or the
-installed filename plus `.previous`). Running instances hold a shared lock, so
-other launches skip the check until they have closed. Offline checks time out
-after 3 seconds; downloads have a 30-second deadline with a 5-second socket
-timeout. Failures are logged to stderr and the installed build starts unchanged.
-Help/version commands skip update checks.
-Update checks request fresh metadata and reject a different release published
-before the running AppImage was built, preventing stale GitHub metadata from
-downgrading a newer installation.
-
-To launch without updating, including when rolling back, use:
+Previously published AppImages still contain the old startup updater. Until
+replacing them, disable it on every launch by setting this environment variable
+in the launcher:
 
 ```sh
-MOONLIGHT_DISABLE_UPDATES=1 /path/to/Moonlight.AppImage.previous
+MOONLIGHT_DISABLE_UPDATES=1 /path/to/Moonlight.AppImage
 ```
 
-To publish an update, create a stable GitHub Release with exactly one
-`Moonlight-fork-x86_64.AppImage` asset from a successful **tag build**, so the badge
-matches the release tag, and include
-`scripts/appimage-update.py` as `appimage-update.py` for first-time migrations.
-Drafts, prereleases and Actions artifacts alone are not offered to clients.
+Native Linux binaries depend on the target system's Qt, SDL and FFmpeg versions.
+Use the same source commit across clients, but build against a compatible runtime
+for each target distribution. A binary built on current Arch Linux is not
+necessarily compatible with SteamOS or Fedora/Bazzite. Rebuild when required
+shared-library versions change; do not replace system libraries to fit a binary.
 
-To withdraw a faulty release, mark it as a draft and mark a known-working stable
-release as latest. This also withdraws its public asset downloads, rather than
-relying only on refreshed latest-release metadata. Cancelling or deleting an
-Actions run does not withdraw assets already published to a GitHub Release.
+The AppImage recipe remains XCB-only and applies
+`app/deploy/linux/sdl3/0001-x11-reconcile-aliased-scancodes.patch` to SDL 3.4.18.
+Without this patch, X11 keyboard reconciliation can release and repress Right Alt
+when an unpressed X11 keycode aliases the held key's SDL scancode. Changing
+capture then triggers more reconciliation and creates a toggle loop. The patch
+combines the physical state of all aliases before comparing it with SDL's state;
+it does not change the shortcut, add a cooldown, or restrict it to release only.
+Removing automatic updates or compiling Moonlight alone does not fix an affected
+system SDL. Previously published AppImages do not contain this patch.
 
-The AppImage retains its original XCB-only Qt platform packaging. Do not add
-Wayland Qt plugins or special Qt deployment stages to it. Launcher-provided
-renderer/decoder overrides are preserved, but a launcher forcing
-`QT_QPA_PLATFORM=wayland` requires a separate Wayland-capable native build.
+For native X11 deployments, build patched SDL 3.4.18 and sdl2-compat 2.32.74
+against the target runtime, installing them to a private prefix rather than
+replacing system libraries. Apply the patch before configuring SDL:
+
+```sh
+git -C /path/to/SDL apply "$PWD/app/deploy/linux/sdl3/0001-x11-reconcile-aliased-scancodes.patch"
+cmake -S /path/to/SDL -B /path/to/SDL-build \
+  -DCMAKE_BUILD_TYPE=Release -DSDL_TEST_LIBRARY=OFF \
+  -DCMAKE_INSTALL_LIBDIR=lib -DCMAKE_INSTALL_PREFIX=/path/to/moonlight-libs
+cmake --build /path/to/SDL-build --parallel
+cmake --install /path/to/SDL-build
+cmake -S /path/to/sdl2-compat -B /path/to/sdl2-build \
+  -DCMAKE_BUILD_TYPE=Release -DSDL2COMPAT_TESTS=OFF \
+  -DCMAKE_PREFIX_PATH=/path/to/moonlight-libs \
+  -DCMAKE_INSTALL_LIBDIR=lib -DCMAKE_INSTALL_PREFIX=/path/to/moonlight-libs
+cmake --build /path/to/sdl2-build --parallel
+cmake --install /path/to/sdl2-build
+```
+
+On systems with an older `pkg-config` that cannot resolve `Provides: sdl2`,
+also create `moonlight-libs/lib/pkgconfig/sdl2.pc` as a symlink to
+`sdl2-compat.pc` in the same directory. The AppImage workflow does this for
+Ubuntu 22.04 so Moonlight and SDL_ttf use the bundled compatibility library.
+
+The supplied `app/deploy/linux/steamdeck-native-launcher` selects XCB in Gaming
+Mode for normal Steam window presentation, and Wayland in Desktop Mode.
+It loads both SDL libraries from the adjacent `moonlight-libs/lib` directory and
+fails explicitly if that private runtime is missing. It does not modify the
+Gamescope session or override its Vulkan layer configuration.
+Install the launcher at the existing Steam shortcut's executable path and put a
+SteamOS-compatible native binary named `moonlight-native` in the same directory.
+The launcher's filename may retain `.AppImage` to preserve the existing shortcut,
+but it launches the native binary, not an AppImage.
+
+The isolated X11 regression test exercises full capture toggles, both Right Alt
+keycode aliases, held keys, focus changes, and passthrough with capture unchanged.
+The AppImage workflow runs it against the patched runtime with and without
+XInput2. To run it locally (requires SDL2, X11/XTest development files and Xvfb):
+
+```sh
+c++ -std=c++11 -Wall -Wextra -Werror -pthread scripts/tests/check_x11_alt_feedback.cpp \
+  $(pkg-config --cflags --libs sdl2 x11 xtst) -o /tmp/check-x11-alt-feedback
+LD_LIBRARY_PATH=/path/to/moonlight-libs/lib SDL_VIDEODRIVER=x11 \
+  xvfb-run -a /tmp/check-x11-alt-feedback
+```
+
+Validate streaming, hardware decoding and both shortcut directions in the actual
+target session, including Steam Deck Gaming Mode separately from Desktop Mode.
+The AppImage workflow also runs the Python launcher and USB/IP helper tests.
+Run these as a regular (non-root) user, like the GitHub-hosted runner:
+
+```sh
+python3 -m unittest discover -s scripts/tests -p 'test_*.py'
+```
 
 ## Building
 

@@ -94,10 +94,6 @@ fi
 APP_RUN=$BUILD_ROOT/AppRun-libva
 cp "$SOURCE_ROOT/app/deploy/linux/AppRun" "$APP_RUN" || fail "Unable to stage AppRun!"
 chmod +x $APP_RUN
-mkdir -p "$DEPLOY_FOLDER/opt/moonlight"
-cp "$SOURCE_ROOT/scripts/appimage-update.py" "$DEPLOY_FOLDER/opt/moonlight/" || fail "Unable to stage AppImage updater!"
-date -u +%s > "$DEPLOY_FOLDER/opt/moonlight/build-time" || fail "Unable to record AppImage build timestamp!"
-
 echo Creating AppImage
 pushd $INSTALLER_FOLDER
 # Don't bundle libva: the bundled build-environment version (jammy: VA-API 1.20/1.22)
