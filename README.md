@@ -156,15 +156,53 @@ python3 -m unittest discover -s scripts/tests -p 'test_*.py'
 
 Hosting for Moonlight's Debian and L4T package repositories is graciously provided for free by [Cloudsmith](https://cloudsmith.com).
 
-## Building
-
-### Input release shortcut
+## Input release shortcut
 
 The default shortcut to toggle captured mouse and keyboard input is
 **Ctrl+Alt+Shift+Z**. To use a single **Right Alt** press instead, enable
 **Settings → Input Settings → Use Right Alt to release captured input**.
 This option is off by default, applies to the next stream, and is available
 in desktop environments. When off, Right Alt is passed through to the host.
+
+## Fork AppImage updates
+
+This fork's x86_64 AppImages check the latest **stable** release in
+[`Darfeikus/moonlight-qt`](https://github.com/Darfeikus/moonlight-qt/releases)
+when launched. Existing Steam shortcuts, desktop launchers and graphics wrappers
+continue to work. Install an update-capable AppImage once on each client;
+subsequent releases are installed automatically before Moonlight starts.
+
+For the one-time migration of an existing native executable or older AppImage,
+close Moonlight, download `appimage-update.py` from the latest release, and run
+`python3 -I appimage-update.py /path/to/the/installed/Moonlight.AppImage`.
+Pass the actual executable, not a graphics-wrapper script. Existing symlinks are
+preserved. The same verified download and rollback behavior is used.
+
+The client needs Python 3.10+ and `flock`. No GitHub login, root access, service or
+scheduled task is needed. The AppImage and its directory must be writable by its
+owner. Launching an extracted AppDir does not update it.
+
+Downloads use HTTPS and must match GitHub's asset SHA-256 digest, size and
+x86_64 AppImage header before they replace the installed file atomically. The
+previous file is kept alongside it as `Moonlight.AppImage.previous` (or the
+installed filename plus `.previous`). Running instances hold a shared lock, so
+other launches skip the check until they have closed. Offline checks time out
+after 3 seconds; downloads have a 30-second deadline with a 5-second socket
+timeout. Failures are logged to stderr and the installed build starts unchanged.
+Help/version commands skip update checks.
+
+To launch without updating, including when rolling back, use:
+
+```sh
+MOONLIGHT_DISABLE_UPDATES=1 /path/to/Moonlight.AppImage.previous
+```
+
+To publish an update, create a stable GitHub Release with exactly one
+`Moonlight-fork-x86_64.AppImage` asset from a successful build, and include
+`scripts/appimage-update.py` as `appimage-update.py` for first-time migrations.
+Drafts, prereleases and Actions artifacts alone are not offered to clients.
+
+## Building
 
 ### Windows Build Requirements
 * Qt 6.11 SDK or later (earlier versions may work but are not officially supported)
