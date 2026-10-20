@@ -587,3 +587,20 @@ macx {
 
 VERSION = "$$cat(version.txt)"
 DEFINES += VERSION_STR=\\\"$$cat(version.txt)\\\"
+
+FORK_RELEASE_NAME = $$(MOONLIGHT_RELEASE_NAME)
+isEmpty(FORK_RELEASE_NAME) {
+    CI_REF_TYPE = $$(GITHUB_REF_TYPE)
+    CI_BUILD_VERSION = $$(CI_VERSION)
+    equals(CI_REF_TYPE, tag) {
+        FORK_RELEASE_NAME = $$(GITHUB_REF_NAME)
+    } else:!isEmpty(CI_BUILD_VERSION) {
+        FORK_RELEASE_NAME = build-$$CI_BUILD_VERSION
+    }
+}
+!isEmpty(FORK_RELEASE_NAME) {
+    !contains(FORK_RELEASE_NAME, "^[A-Za-z0-9._-]+$") {
+        error("Release names must contain only letters, digits, dots, underscores or hyphens")
+    }
+    DEFINES += FORK_RELEASE_NAME=\\\"$$FORK_RELEASE_NAME\\\"
+}

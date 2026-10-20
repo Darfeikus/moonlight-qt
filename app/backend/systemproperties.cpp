@@ -47,6 +47,11 @@ private:
 SystemProperties::SystemProperties()
 {
     versionString = QString(VERSION_STR);
+#ifdef FORK_RELEASE_NAME
+    releaseName = QString(FORK_RELEASE_NAME);
+#else
+    releaseName = tr("Development (%1)").arg(versionString);
+#endif
     hasDesktopEnvironment = WMUtils::isRunningDesktopEnvironment();
     isRunningWayland = WMUtils::isRunningWayland();
     isRunningXWayland = isRunningWayland && QGuiApplication::platformName() == "xcb";

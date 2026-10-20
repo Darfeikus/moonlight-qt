@@ -167,6 +167,12 @@ Existing saved checkbox choices are preserved when updating.
 
 ## Fork AppImage updates
 
+The small badge at the top-left of the application toolbar identifies the running
+release, including while offline. It is part of the client UI, not the streamed
+desktop. Tagged CI builds embed the Git tag; other CI builds show `build-COMMIT`,
+and local builds show `Development (VERSION)`. To supply a custom build label,
+export `MOONLIGHT_RELEASE_NAME` before configuring and building the project.
+
 This fork's x86_64 AppImages check the latest **stable** release in
 [`Darfeikus/moonlight-qt`](https://github.com/Darfeikus/moonlight-qt/releases)
 when launched. Existing Steam shortcuts, desktop launchers and graphics wrappers
@@ -199,9 +205,14 @@ MOONLIGHT_DISABLE_UPDATES=1 /path/to/Moonlight.AppImage.previous
 ```
 
 To publish an update, create a stable GitHub Release with exactly one
-`Moonlight-fork-x86_64.AppImage` asset from a successful build, and include
+`Moonlight-fork-x86_64.AppImage` asset from a successful **tag build**, so the badge
+matches the release tag, and include
 `scripts/appimage-update.py` as `appimage-update.py` for first-time migrations.
 Drafts, prereleases and Actions artifacts alone are not offered to clients.
+
+The AppImage includes both XCB and Wayland Qt platform plugins and preserves
+`QT_QPA_PLATFORM` and renderer/decoder overrides supplied by launcher wrappers.
+It uses the host's Wayland libraries, EGL implementation and VA-API drivers.
 
 ## Building
 

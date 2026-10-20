@@ -269,6 +269,25 @@ ApplicationWindow {
                 }
             }
 
+            Label {
+                id: releaseBadge
+                objectName: "releaseBadge"
+                text: SystemProperties.releaseName
+                font.pointSize: 9
+                leftPadding: 8
+                rightPadding: 8
+                topPadding: 4
+                bottomPadding: 4
+                elide: Label.ElideRight
+                Layout.maximumWidth: Math.min(200, toolBar.width / 4)
+                Layout.alignment: Qt.AlignVCenter
+
+                background: Rectangle {
+                    radius: 4
+                    color: Qt.rgba(1, 1, 1, 0.1)
+                }
+            }
+
             // This label will appear when the window gets too small and
             // we need to ensure the toolbar controls don't collide
             Label {
